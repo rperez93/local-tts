@@ -497,10 +497,27 @@ def check(argv):
         print("player tuning: %s" % "; ".join(tuning))
     print("tone shaping: %s" % _tone_shaping_status())
     print("phonetics   : %s" % _phonetics_status(cfg))
+    print("transcriber : %s" % _transcriber_status())
     print("streaming   : %s" % ("on -- each fragment plays as it is synthesized"
                                 if cfg.get("stream", True) else
                                 "off (`%s config --set stream=true` to play as it renders)" % PROG))
     return 0 if ok_default else 1
+
+
+def _transcriber_status():
+    """Which transcriber local-tts itself has, which is not the same question as which
+    backend can be handed phonemes.
+
+    Worth printing because the two are easy to confuse: a real phonemizer here means
+    every language espeak knows can be transcribed, while the rules cover only the
+    languages someone wrote them for.
+    """
+    from localtts import g2p
+    if g2p.using_library():
+        return "espeak, through the `phonemes` extra -- every language it knows"
+    languages = ", ".join(g2p.supported()) or "none"
+    return ("built-in rules only (%s); `pip install -e \".[phonemes]\"` adds espeak "
+            "and every language it knows" % languages)
 
 
 def _phonetics_status(cfg):

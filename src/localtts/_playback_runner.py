@@ -76,7 +76,7 @@ def run_stream(argv):
                                        paused=False, elapsed=elapsed,
                                        segment_start=time.time(), session=session)
                     if title_on:
-                        audio.write_terminal_title(audio.title_for(label, total), tty)
+                        audio.write_terminal_title(audio.title_for(label, total, tty), tty)
                         painted = True
                     _play(cmd)
                     elapsed += audio._safe_duration(part)
@@ -91,7 +91,7 @@ def run_stream(argv):
                 time.sleep(POLL_SECONDS)
         finally:
             if painted:
-                audio.write_terminal_title("", tty)
+                audio.restore_title(tty)
             lock.release(handle)
             audio.stream_cleanup(stream_dir)
 
@@ -121,7 +121,7 @@ def main(argv):
                                stdin=subprocess.DEVNULL, env=audio.player_environment())
             finally:
                 if title:
-                    audio.write_terminal_title("", tty)
+                    audio.restore_title(tty)
         finally:
             lock.release(handle)
 

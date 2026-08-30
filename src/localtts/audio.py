@@ -190,7 +190,7 @@ def play(path, preferred="", verbose=False, title=True):
                 return True
         finally:
             if painted:
-                write_terminal_title("")
+                restore_title()
             filelock.release(handle)
     return True
 
@@ -363,13 +363,105 @@ def write_terminal_title(text, tty=""):
         pass
 
 
-def title_for(path, duration_seconds=0.0):
-    """The title text shown while `path` plays."""
+#: Query the terminal for its current window title (xterm OSC 21). The reply
+#: comes back as ESC ] l <title> ESC \\ on the same tty.
+_OSC_QUERY_TITLE = "\033[21t"
+
+#: Cached base title: the tab's own text, read once per tty. None means "not
+#: asked yet", "" means "asked and the terminal did not answer".
+_BASE_TITLE = {}
+
+
+def read_terminal_title(tty="", timeout=0.15):
+    """The tab's current title, or "" if the terminal will not say.
+
+    Most terminals answer xterm's OSC 21, but plenty refuse on purpose -- being
+    able to read a title back is a small information leak, so it is disabled in
+    several of them. Refusing is normal, not an error: the caller falls back to
+    replacing the title instead of prefixing it.
+
+    The answer is read raw, with the tty briefly in non-canonical mode so a
+    reply that never comes cannot block playback.
+    """
+    import select
+    import termios
+    import tty as ttymod
+
+    path = tty or terminal_path()
+    if not path:
+        return ""
+    try:
+        fd = os.open(path, os.O_RDWR | getattr(os, "O_NOCTTY", 0))
+    except OSError:
+        return ""
+    try:
+        try:
+            previo = termios.tcgetattr(fd)
+        except termios.error:
+            return ""                      # not a real terminal
+        try:
+            ttymod.setraw(fd)
+            os.write(fd, _OSC_QUERY_TITLE.encode("ascii"))
+            datos = b""
+            fin = time.time() + timeout
+            while time.time() < fin:
+                listo, _, _ = select.select([fd], [], [], max(0.0, fin - time.time()))
+                if not listo:
+                    break
+                trozo = os.read(fd, 256)
+                if not trozo:
+                    break
+                datos += trozo
+                if datos.endswith(b"\033\\") or datos.endswith(b"\007"):
+                    break
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, previo)
+    except (OSError, ValueError):
+        return ""
+    finally:
+        os.close(fd)
+
+    texto = datos.decode("utf-8", "replace")
+    m = re.search(r"\033\]l(.*?)(?:\033\\|\007)", texto, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def base_title(tty=""):
+    """The tab's own text, asked once per tty and remembered.
+
+    Asked once because the query costs a round trip to the terminal and the tab
+    name does not change while a single file plays.
+    """
+    clave = tty or terminal_path() or "-"
+    if clave not in _BASE_TITLE:
+        _BASE_TITLE[clave] = read_terminal_title(tty)
+    return _BASE_TITLE[clave]
+
+
+def title_for(path, duration_seconds=0.0, tty=""):
+    """The title text shown while `path` plays.
+
+    The icon goes FIRST so a tab that is speaking is recognisable at a glance
+    in a row of tabs, where everything after the first few characters is cut
+    off anyway.
+
+    When the terminal reports its own title, the icon is prefixed to it and the
+    tab keeps its identity -- which is the whole point: you want to know *which*
+    of your tabs is talking, and a tab renamed to the wav file no longer tells
+    you that. When it does not, we fall back to naming the file, as before.
+    """
+    base = base_title(tty)
+    if base:
+        return "%s %s" % (TITLE_ICON, base)
     label = os.path.basename(path) or "audio"
     if duration_seconds and duration_seconds > 0:
         return "%s %s %s" % (TITLE_ICON, format_time(duration_seconds), label)
     return "%s %s" % (TITLE_ICON, label)
 
+
+def restore_title(tty=""):
+    """Put the tab's own text back, or clear it if we never learned it."""
+    write_terminal_title(base_title(tty), tty)
 
 def play_detached(path, preferred="", verbose=False, session=None, title=True):
     """Start playback in the background. Returns (pid, duration_seconds), or (None, 0).

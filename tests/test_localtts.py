@@ -3,6 +3,7 @@
 import http.server
 import json
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -14,7 +15,8 @@ import unittest.mock
 import wave
 from pathlib import Path
 
-from localtts import audio, audiofx, config, hooks, providers, skills, text as textutil
+from localtts import audio, audiofx, config, g2p, hooks, providers, skills, text as textutil
+from localtts.g2p import en as g2p_en, es as g2p_es
 from localtts.cli import _resolve_session, _synthesize, main
 from localtts.errors import TTSError
 from localtts.providers.base import Provider
@@ -2812,3 +2814,202 @@ class PhoneticsOnTheWireTest(unittest.TestCase):
 
         cfg["providers"]["rvc"]["base_provider"] = "piper"
         self.assertFalse(RvcProvider(cfg["providers"]["rvc"], cfg=cfg).supports_phonetics)
+
+
+class SpanishG2PTest(unittest.TestCase):
+    """Grapheme to phoneme in pure Python, checked against espeak's output.
+
+    The expected strings were produced by espeak (through kokoro-onnx's tokenizer) and
+    frozen here: the point of this module is to reproduce them *without* it, so the test
+    must not import it either -- a test that needs the dependency proves nothing about
+    code written to avoid it.
+    """
+
+    #: word -> what espeak says. One per rule, plus the cases each rule was written for.
+    WORDS = {
+        # seseo: es-419 has no θ
+        "zapato": "sapˈato", "cinco": "sˈinko", "cerveza": "seɾβˈesa",
+        # occlusive after a pause or nasal, fricative elsewhere
+        "bambú": "bambˈu", "sobre": "sˈoβɾe", "hidrógeno": "iðɾˈoxeno",
+        "admitir": "ˌadmitˈiɾ", "devuelvas": "deβwˈelβas",
+        # rising vs falling diphthongs
+        "cuando": "kwˈando", "treinta": "tɾˈeɪnta", "cualquier": "kwalkjˈeɾ",
+        "canción": "kansjˈon",
+        # hiatus: after a liquid cluster, after a dieresis, two strong vowels
+        "luego": "luˈeɣo", "gruesa": "ɡɾuˈesa", "cigüeña": "sˌiɣuˈeɲa",
+        "paella": "paˈejja", "día": "dˈia",
+        # the silent u of que/gui, which used to shift the stress
+        "químico": "kˈimiko", "aquella": "akˈejja", "guillermo": "ɡijjˈeɾmo",
+        # stress from spelling, and the secondary espeak adds when the primary is far in
+        "antes": "ˈantes", "cantidad": "kˌantiðˈad", "azulejos": "ˌasulˈexos",
+        "configuración": "kˌonfiɣˌuɾasjˈon",
+        # -mente is a compound: two primaries, and the base keeps its open e
+        "solamente": "sˈolamˈente", "lentamente": "lˈɛntamˈente",
+        "absolutamente": "ˌaβsolˈutamˈente",
+        # assorted single rules
+        "chaleco": "tʃalˈeko", "llegaron": "ʝeɣˈaɾon", "ingenieros": "ˌiŋxenjˈeɾos",
+        "convincentes": "kˌombinsˈɛntes", "captura": "kapːtˈuɾa",
+        "psicóloga": "sikˈoloɣa", "xochimilco": "sˌotʃimˈilko", "zinc": "sˈink",
+        "cuarenta": "kwaɾˈɛnta", "energía": "ˌeneɾxˈia", "valiosos": "baljˈosos",
+    }
+
+    #: Sentence-level behaviour, which word-by-word transcription cannot reach.
+    SENTENCES = {
+        "El zorro veloz salta sobre el perro perezoso.":
+            "el sˈoro βelˈos sˈalta sˌoβɾe el pˈero pˌeɾesˈoso.",
+        "La ingeniería aeroespacial exige cálculos precisos.":
+            "la ˌiŋxenjeɾˈia ˌaeɾˌoespasjˈal eksˈixe kˈalkulos pɾesˈisos.",
+    }
+
+    def test_every_word(self):
+        for word, expected in self.WORDS.items():
+            self.assertEqual(g2p_es.phonemes_for(word), expected, word)
+
+    def test_sentences_are_not_words_joined(self):
+        """Function words lose their stress, and a b/d/g relaxes across the boundary:
+        "zorro veloz" is βelˈos though "veloz" alone starts with an occlusive."""
+        for sentence, expected in self.SENTENCES.items():
+            self.assertEqual(g2p_es.phonemes(sentence).strip(), expected, sentence)
+
+    def test_a_word_alone_keeps_the_stress_it_loses_in_a_sentence(self):
+        self.assertEqual(g2p_es.phonemes_for("el"), "ˈel")
+        self.assertEqual(g2p_es.phonemes("el perro").strip(), "el pˈero")
+
+    def test_no_third_party_import(self):
+        """The whole point: this runs where local-tts runs, which is stdlib only."""
+        source = Path(g2p_es.__file__).read_text(encoding="utf-8")
+        imports = re.findall(r"^\s*(?:import|from)\s+([\w.]+)", source, re.MULTILINE)
+        self.assertEqual([m for m in imports if m.split(".")[0] not in
+                          sys.stdlib_module_names], [])
+
+
+class EnglishG2PTest(unittest.TestCase):
+    """English is not phonemic, and the split between rules and lexicon is the point.
+
+    Rules alone reach about a quarter of running text -- "through" and "thought" share
+    four letters and sound nothing alike, and no rule recovers "colonel". The frozen
+    lexicon carries those, and together they reach every word in the shipped corpus.
+    """
+
+    def test_rules_handle_the_regular_cases(self):
+        for word, expected in {"cat": "kˈæt", "ship": "ʃˈɪp", "king": "kˈɪŋ"}.items():
+            self.assertEqual(g2p_en.phonemes_for(word), expected, word)
+
+    def test_the_lexicon_carries_what_rules_cannot(self):
+        """These are the words the whole two-part design exists for."""
+        for word in ("colonel", "wednesday", "through", "island"):
+            said = g2p.phonemes_for(word, "en-us")
+            self.assertNotEqual(said, g2p_en.phonemes_for(word), word)
+            self.assertTrue(said, word)
+
+    def test_a_sentence_is_not_its_words_joined(self):
+        """"to" is tuː alone and tə in running speech."""
+        self.assertEqual(g2p.phonemes_for("to", "en-us"), "tuː")
+        self.assertIn("tə", g2p.phonemes("go to work", "en-us"))
+
+    def test_an_unknown_language_says_so(self):
+        """None, not a guess: a caller that gets a string sends it to the model as
+        phonemes, and a wrong transcription is worse than falling back to text.
+
+        With the library absent, which is upstream's state and the one this asserts --
+        installed, espeak knows French perfectly well and the answer is a string. The
+        rules are what has gaps, so the rules are what this pins.
+        """
+        with unittest.mock.patch.object(g2p.backend, "available", return_value=False):
+            self.assertIsNone(g2p.phonemes("bonjour", "fr-fr"))
+            self.assertIsNone(g2p.phonemes_for("bonjour", "fr-fr"))
+
+    def test_both_languages_are_shipped(self):
+        self.assertIn("es", g2p.supported())
+        self.assertIn("en", g2p.supported())
+
+    def test_the_lexicon_is_data_not_code(self):
+        table = g2p.lexicon_for("en-us")
+        self.assertGreater(len(table), 100)
+        self.assertTrue(all(isinstance(v, str) and v for v in table.values()))
+
+
+class PhonemizerBackendTest(unittest.TestCase):
+    """The optional extra. These must pass whether or not it is installed: upstream has
+    no dependencies, and a test that needs one would fail there for the wrong reason."""
+
+    def test_the_rules_still_answer_when_the_library_is_absent(self):
+        with unittest.mock.patch.object(g2p.backend, "available", return_value=False):
+            self.assertEqual(g2p.phonemes_for("zapato", "es-419"), "sapˈato")
+
+    def test_an_unknown_language_is_none_without_the_library(self):
+        with unittest.mock.patch.object(g2p.backend, "available", return_value=False):
+            self.assertIsNone(g2p.phonemes("bonjour", "fr-fr"))
+
+    def test_the_library_wins_when_present(self):
+        """It is what the model was trained against; the rules exist because upstream
+        cannot depend on it, not because they are better."""
+        with unittest.mock.patch.object(g2p.backend, "phonemes",
+                                        return_value="from-the-library"):
+            self.assertEqual(g2p.phonemes("zapato", "es-419"), "from-the-library")
+            self.assertEqual(g2p.phonemes_for("zapato", "es-419"), "from-the-library")
+
+    def test_the_library_covers_languages_no_rules_exist_for(self):
+        with unittest.mock.patch.object(g2p.backend, "phonemes", return_value="bɔ̃ʒˈuʁ"):
+            self.assertEqual(g2p.phonemes("bonjour", "fr-fr"), "bɔ̃ʒˈuʁ")
+
+    def test_a_failing_library_falls_back_rather_than_raising(self):
+        """A phonemizer that throws must not take synthesis down with it."""
+        with unittest.mock.patch.object(g2p.backend, "available", return_value=True), \
+             unittest.mock.patch.object(g2p.backend, "_backend",
+                                        side_effect=RuntimeError("espeak exploded")):
+            self.assertIsNone(g2p.backend.phonemes("hola", "es-419"))
+class TerminalTitleTest(unittest.TestCase):
+    """El icono va delante del nombre propio de la pestaña."""
+
+    def setUp(self):
+        audio._BASE_TITLE.clear()
+
+    def tearDown(self):
+        audio._BASE_TITLE.clear()
+
+    def test_prefija_el_titulo_de_la_pestana(self):
+        with unittest.mock.patch.object(audio, "read_terminal_title",
+                                        return_value="proyecto: local-tts"):
+            self.assertEqual(audio.title_for("/tmp/x.wav", 12.0),
+                             "%s proyecto: local-tts" % audio.TITLE_ICON)
+
+    def test_icono_primero(self):
+        """En una fila de pestañas solo se ven los primeros caracteres."""
+        with unittest.mock.patch.object(audio, "read_terminal_title", return_value="algo"):
+            self.assertTrue(audio.title_for("/tmp/x.wav").startswith(audio.TITLE_ICON))
+
+    def test_reserva_al_nombre_del_fichero(self):
+        """Una terminal que no contesta no es un error: se nombra el fichero."""
+        with unittest.mock.patch.object(audio, "read_terminal_title", return_value=""):
+            self.assertEqual(audio.title_for("/tmp/x.wav", 12.0),
+                             "%s 0:12 x.wav" % audio.TITLE_ICON)
+
+    def test_restaurar_devuelve_el_titulo_propio(self):
+        escrito = []
+        with unittest.mock.patch.object(audio, "read_terminal_title", return_value="mi pestaña"), \
+             unittest.mock.patch.object(audio, "write_terminal_title",
+                                        side_effect=lambda t, tty="": escrito.append(t)):
+            audio.restore_title()
+        self.assertEqual(escrito, ["mi pestaña"])
+
+    def test_restaurar_limpia_si_no_se_supo(self):
+        escrito = []
+        with unittest.mock.patch.object(audio, "read_terminal_title", return_value=""), \
+             unittest.mock.patch.object(audio, "write_terminal_title",
+                                        side_effect=lambda t, tty="": escrito.append(t)):
+            audio.restore_title()
+        self.assertEqual(escrito, [""])
+
+    def test_se_consulta_una_sola_vez_por_tty(self):
+        """La consulta cuesta un viaje de ida y vuelta y el nombre no cambia."""
+        with unittest.mock.patch.object(audio, "read_terminal_title",
+                                        return_value="x") as leer:
+            audio.base_title("/dev/pts/9")
+            audio.base_title("/dev/pts/9")
+            audio.base_title("/dev/pts/9")
+        self.assertEqual(leer.call_count, 1)
+
+    def test_leer_no_revienta_sin_terminal(self):
+        with unittest.mock.patch.object(audio, "terminal_path", return_value=""):
+            self.assertEqual(audio.read_terminal_title(), "")

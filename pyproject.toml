@@ -19,6 +19,15 @@ classifiers = [
 # No runtime dependencies. Standard library only, on purpose.
 dependencies = []
 
+# Optional: a real phonemizer. Upstream transcribes with hand-written rules -- exact
+# for Spanish, partial for English, nothing else -- because it may not depend on
+# anything. With this extra installed, every language espeak knows works, and the rules
+# become a fallback. 22 MB, espeak's own binary included, no system package needed.
+#
+#     pip install -e ".[phonemes]"
+[project.optional-dependencies]
+phonemes = ["phonemizer>=3.0", "espeakng-loader>=0.2"]
+
 [project.scripts]
 tts = "localtts.cli:main"
 local-tts = "localtts.cli:main"
