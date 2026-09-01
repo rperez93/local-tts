@@ -76,3 +76,13 @@ Thumbs.db
 *.mp3
 *.flac
 *.opus
+
+# Voice models. Hundreds of MB each and never source: a piper .onnx is 60 MB, an RVC
+# .pth 55 MB with a .index several times that. They belong wherever the backend keeps
+# them -- the configure skill puts them under ~/.local/share -- but a checkout used for
+# testing tends to accumulate them, and one distracted `git add .` is all it takes.
+models/
+*.onnx
+*.onnx.json
+*.pth
+*.index
