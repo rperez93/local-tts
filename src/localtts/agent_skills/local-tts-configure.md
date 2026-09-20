@@ -811,6 +811,9 @@ def make_handler(models, default_name, last_activity, lock):
                 if not data:
                     raise RuntimeError("conversion produced no audio")
             except Exception as exc:
+                # Cleanup must finish before the client receives the failure.
+                if os.path.exists(out_path):
+                    os.unlink(out_path)
                 self._json(500, {"error": str(exc)}); return
             finally:
                 if os.path.exists(out_path):

@@ -964,7 +964,7 @@ class SupportsToneTagsTest(unittest.TestCase):
             self.assertEqual(provider.supports_tone_tags, want, name)
 
     def test_kokoro_never_sees_a_literal_tag(self):
-        provider = KokoroProvider(dict(config.DEFAULTS["providers"]["kokoro"], binary="kokoro-tts"))
+        provider = KokoroProvider(dict(config.DEFAULTS["providers"]["kokoro"], binary=sys.executable))
         seen = []
 
         def fake_run(cmd, **kwargs):
@@ -1540,7 +1540,7 @@ class LanguageMemoryTest(unittest.TestCase):
         self.assertEqual(main(["--lang", "xx", "hola"]), 1)
 
     def test_explicit_provider_beats_the_recorded_one(self):
-        config.set_values(["languages.es=piper:/voices/es.onnx"])
+        config.set_values(["languages.es=piper:/voices/es.onnx", "llamacpp.binary=" + sys.executable])
         self.assertEqual(main(["--lang", "es", "-p", "llamacpp", "--dry-run", "hola"]), 0)
 
 
@@ -2292,7 +2292,7 @@ class ToneRealizationTest(unittest.TestCase):
         -- so a tag's volume has to be applied in its own loop. It used to be dropped
         silently, which made <whisper> merely slow rather than quiet."""
         provider = KokoroProvider(dict(config.DEFAULTS["providers"]["kokoro"],
-                                       binary="kokoro-tts"))
+                                       binary=sys.executable))
         provider.run = lambda cmd, **kw: self.loud_wav(cmd[cmd.index("-o") + 1])
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "out.wav")
@@ -2488,6 +2488,7 @@ class PlayerSelectionTest(unittest.TestCase):
         exe = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
         with unittest.mock.patch.object(audio, "_is_wsl", return_value=True), \
              unittest.mock.patch.object(audio, "_powershell_exe", return_value=exe), \
+             unittest.mock.patch.object(audio.subprocess, "check_output", return_value="C:\\sample.wav"), \
              unittest.mock.patch.object(audio.shutil, "which",
                                         side_effect=lambda n: "/usr/bin/" + n):
             self.assertEqual(audio.find_player("/tmp/x.wav")[0], exe)
@@ -2549,7 +2550,7 @@ class StreamPublishingTest(unittest.TestCase):
 
     def test_parts_are_published_in_order_as_they_render(self):
         provider = KokoroProvider(dict(config.DEFAULTS["providers"]["kokoro"],
-                                       binary="kokoro-tts"))
+                                       binary=sys.executable))
         published = []
         provider.run = self.writer("-o")
         provider.on_part = lambda path: published.append(
