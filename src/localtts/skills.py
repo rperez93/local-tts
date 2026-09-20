@@ -1,8 +1,7 @@
 """Install the local-tts agent skills into whichever coding agents are present.
 
-Two shapes of target exist. Agents with a real skill mechanism (Claude Code, Gemini CLI)
-get `<root>/skills/<name>/SKILL.md`. Agents that read one flat instructions file get a
-delimited section appended to it, so the rest of the user's file is never touched.
+All current targets use native `<root>/skills/<name>/SKILL.md` files. Legacy
+delimited instruction sections are migrated with backups, preserving unrelated text.
 """
 
 import os
@@ -15,6 +14,13 @@ from localtts.errors import TTSError
 
 SKILLS = ("local-tts-speak", "local-tts-configure", "local-tts-update",
           "local-tts-tune", "local-tts-phonetics")
+
+LEGACY = {
+    "codex": ".codex/AGENTS.md",
+    "cursor": ".cursor/rules/local-tts.mdc",
+    "windsurf": ".codeium/windsurf/memories/local-tts.md",
+    "copilot": "${CONFIG}/github-copilot/local-tts-instructions.md",
+}
 
 BEGIN = "<!-- BEGIN local-tts skills -->"
 END = "<!-- END local-tts skills -->"
@@ -29,11 +35,11 @@ END = "<!-- END local-tts skills -->"
 AGENTS = {
     "claude-code": ("skill", ".claude", "Claude Code"),
     "gemini": ("skill", ".gemini", "Gemini CLI"),
-    "opencode": ("skill", "${CONFIG}/opencode", "OpenCode"),
-    "codex": ("doc", ".codex/AGENTS.md", "Codex CLI"),
-    "cursor": ("doc", ".cursor/rules/local-tts.mdc", "Cursor"),
-    "windsurf": ("doc", ".codeium/windsurf/memories/local-tts.md", "Windsurf"),
-    "copilot": ("doc", "${CONFIG}/github-copilot/local-tts-instructions.md", "GitHub Copilot"),
+    "opencode": ("skill", "${XDG_CONFIG}/opencode", "OpenCode"),
+    "codex": ("skill", ".agents", "Codex CLI"),
+    "cursor": ("skill", ".cursor", "Cursor"),
+    "windsurf": ("skill", ".codeium/windsurf", "Windsurf"),
+    "copilot": ("skill", ".copilot", "GitHub Copilot CLI"),
     "qwen": ("skill", ".qwen", "Qwen Code"),
 }
 
@@ -42,11 +48,11 @@ AGENTS = {
 MARKERS = {
     "claude-code": (".claude",),
     "gemini": (".gemini",),
-    "opencode": ("${CONFIG}/opencode", ".config/opencode"),
+    "opencode": ("${XDG_CONFIG}/opencode", ".config/opencode"),
     "codex": (".codex",),
     "cursor": (".cursor",),
     "windsurf": (".codeium/windsurf", ".windsurf"),
-    "copilot": ("${CONFIG}/github-copilot", ".config/github-copilot",
+    "copilot": (".copilot", "${CONFIG}/github-copilot", ".config/github-copilot",
                 "${CONFIG}/GitHub Copilot"),
     "qwen": (".qwen",),
 }
@@ -91,6 +97,9 @@ def config_root(base=None):
 def resolve(relative, base=None):
     """Turn a possibly ${CONFIG}-prefixed relative path into an absolute one."""
     text = str(relative)
+    if text.startswith("${XDG_CONFIG}"):
+        root = Path(base) / ".config" if base else Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        return root / text[len("${XDG_CONFIG}"):].lstrip("/\\")
     if text.startswith("${CONFIG}"):
         return config_root(base) / text[len("${CONFIG}"):].lstrip("/\\")
     return home(base) / text
@@ -156,6 +165,10 @@ def install(agent, base=None, names=SKILLS, dry_run=False):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(read_skill(name), encoding="utf-8")
             written.append(path)
+        if agent in LEGACY and set(names) == set(SKILLS):
+            legacy = resolve(LEGACY[agent], base)
+            if _remove_legacy_codex_section(legacy, dry_run=dry_run):
+                written.append(legacy)
         return written
 
     path = target_paths(names[0], agent, base)
@@ -176,6 +189,28 @@ def install(agent, base=None, names=SKILLS, dry_run=False):
     return written
 
 
+def _remove_legacy_codex_section(path, dry_run=False):
+    """Retire only our delimited block after native skills have been installed."""
+    if not path.exists():
+        return False
+    existing = path.read_text(encoding="utf-8")
+    start = existing.find(BEGIN)
+    end = existing.find(END, start + len(BEGIN)) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return False
+    if not dry_run:
+        # Keep the exact former file once, including any edits inside our block.
+        backup = path.with_name(path.name + ".local-tts.bak")
+        if not backup.exists():
+            backup.write_text(existing, encoding="utf-8")
+        remainder = existing[:start] + existing[end + len(END):]
+        if remainder.strip():
+            path.write_text(remainder, encoding="utf-8")
+        else:
+            path.unlink()
+    return True
+
+
 def uninstall(agent, base=None, names=SKILLS):
     """Remove what install() wrote. Returns the list of paths affected."""
     if agent not in AGENTS:
@@ -192,6 +227,10 @@ def uninstall(agent, base=None, names=SKILLS):
                 parent = path.parent
                 if parent.is_dir() and not any(parent.iterdir()):
                     parent.rmdir()
+        if agent in LEGACY and set(names) == set(SKILLS):
+            legacy = resolve(LEGACY[agent], base)
+            if _remove_legacy_codex_section(legacy):
+                removed.append(legacy)
         return removed
 
     path = target_paths(names[0], agent, base)

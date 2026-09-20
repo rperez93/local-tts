@@ -3,18 +3,19 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
 
-from localtts import (__version__, audio, config, hooks, phonetics, providers,
+from localtts import (__version__, audio, cache, calibration, config, hooks, phonetics, providers,
                       servers, skills, text as textutil)
 from localtts.errors import TTSError
 
 PROG = "tts"
 SUBCOMMANDS = ("config", "providers", "check", "languages", "skills", "hooks",
-               "servers", "pronounce", "playback", "stop", "pause", "resume")
+               "servers", "pronounce", "calibrate", "cache", "warm", "settings", "playback", "stop", "pause", "resume")
 
 #: Environment variables known to hold a stable per-run session id, checked in order.
 #: Verified against a live capture: Claude Code's own status-line JSON payload carries
@@ -62,6 +63,7 @@ def _speak_parser():
             "  %(prog)s hooks                install a status-bar hook (fewer chat messages)\n"
             "  %(prog)s servers             persistent server scripts: current or stale\n"
             "  %(prog)s pronounce WORD      try a transcription for one word, by ear\n"
+            "  %(prog)s calibrate           save language samples and timing measurements\n"
             "  %(prog)s stop | pause | resume control background playback\n"
             "  %(prog)s check                verify backends and audio players\n"
             "  %(prog)s config --show        print the effective configuration\n"
@@ -105,6 +107,8 @@ def _speak_parser():
                              "being synthesized (default; see the `stream` setting)")
     parser.add_argument("--no-stream", dest="stream", action="store_false",
                         help="synthesize the whole text first, then play one joined file")
+    parser.add_argument("--refresh-cache", action="store_true", help="render fresh audio and replace its cached entry")
+    parser.add_argument("--no-cache", action="store_true", help="bypass audio cache for this render")
     parser.add_argument("--keep", action="store_true", help="keep the temporary file and print its path")
     parser.add_argument("--dry-run", action="store_true", help="print the command that would run, then exit")
     parser.add_argument("--verbose", action="store_true", help="show the backend's own output")
@@ -212,6 +216,11 @@ def speak(argv):
         temporary = True
 
     args.voice = voice
+    output_format = os.path.splitext(out_path)[1].lstrip('.').lower() or provider.default_format
+    if provider.name == "openai":
+        from localtts.providers.openai import FORMATS
+        if output_format not in FORMATS:
+            raise TTSError("unsupported output format %r" % output_format)
     if args.dry_run:
         # A provider that can't act on <tag> tone tags (text.tone_segments()) never sees
         # them at runtime either -- synthesize_chunked() strips them first. Mirror that
@@ -316,7 +325,32 @@ def speak(argv):
     # (Windows' built-in player cannot take mp3 at all).
     use_stream = should_play and stream_on and provider.default_format == "wav"
 
-    sink = _StreamSink(audio.stream_new()) if use_stream else None
+    try:
+        ending_ms = float(cfg.get("ending_silence_ms", 0))
+        if not 0 <= ending_ms <= 5000:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise TTSError("ending_silence_ms must be between 0 and 5000")
+    ending_seconds = ending_ms / 1000 if provider.default_format == "wav" else 0
+    audio_cache, cache_key, cache_hit = None, None, False
+    if cfg.get("cache_enabled") and not args.no_cache and not cfg.get("phonetics_hooks"):
+        audio_cache = cache.AudioCache(cfg)
+        try:
+            cache_key = cache.fingerprint(provider, text, args.voice, cfg, output_format)
+            if cache_key is None:
+                audio_cache = None
+                if args.verbose:
+                    print("audio cache bypassed: local server identity is stale or unavailable; refresh/restart it", file=sys.stderr)
+            else:
+                cache_hit = not args.refresh_cache and audio_cache.get(cache_key, out_path)
+        except (OSError, ValueError) as exc:
+            if args.verbose:
+                print("cache unavailable: %s" % exc, file=sys.stderr)
+            audio_cache = None
+        if args.verbose:
+            print("audio cache: %s" % ("hit" if cache_hit else "miss"), file=sys.stderr)
+    # A hit is already a complete file: avoid starting/polling a streaming worker.
+    sink = _StreamSink(audio.stream_new(), ending_seconds) if use_stream and not cache_hit else None
     runner = None
     try:
         if sink:
@@ -330,10 +364,23 @@ def speak(argv):
                 audio.stream_cleanup(sink.directory)   # no player at all -- fall through
                 sink = None
             else:
-                provider.on_part = sink.add
+                provider.on_part = sink
 
         try:
-            _synthesize(provider, text, out_path, args)
+            if not cache_hit:
+                _synthesize(provider, text, out_path, args)
+                if ending_seconds:
+                    from localtts import audiofx
+                    audiofx.append_silence(out_path, ending_seconds)
+                if audio_cache:
+                    try:
+                        # A concurrent server start/model replacement must not publish
+                        # old-model audio under the requested new-model identity.
+                        if cache.fingerprint(provider, text, args.voice, cfg, output_format) == cache_key:
+                            audio_cache.put(cache_key, out_path, replace=args.refresh_cache)
+                    except (OSError, ValueError) as exc:
+                        if args.verbose:
+                            print("cache write skipped: %s" % exc, file=sys.stderr)
         finally:
             provider.on_part = None
             if sink:
@@ -396,9 +443,27 @@ class _StreamSink:
     they arrive. Providers call this through Provider.emit_part(); see audio.stream_add.
     """
 
-    def __init__(self, directory):
+    def __init__(self, directory, ending_seconds=0):
         self.directory = directory
         self.count = 0
+        self.ending_seconds = ending_seconds
+
+    def __call__(self, path):
+        self.add(path)
+
+    def final(self, path):
+        # Pad a private copy before publication, never a file a player may have open.
+        if not self.ending_seconds:
+            return self.add(path)
+        from localtts import audiofx
+        padded = os.path.join(self.directory, "ending.wav")
+        try:
+            shutil.copyfile(path, padded)
+            audiofx.append_silence(padded, self.ending_seconds)
+            self.add(padded)
+        finally:
+            if os.path.exists(padded):
+                os.unlink(padded)
 
     def add(self, path):
         audio.stream_add(self.directory, self.count, path)
@@ -779,7 +844,8 @@ def pronounce_command(argv):
     if not word:
         raise TTSError("nothing to pronounce")
     sentence = args.sentence.strip() or word
-    if args.sentence and word.lower() not in args.sentence.lower():
+    if args.sentence and not re.search(r"(?<!\w)%s(?!\w)" % re.escape(word),
+                                       textutil.strip_tone_tags(sentence), re.IGNORECASE):
         raise TTSError("%r does not appear in --sentence %r, so there would be nothing "
                        "to hear the difference in" % (word, args.sentence))
 
@@ -806,7 +872,7 @@ def pronounce_command(argv):
         print("dictionary : %s (in effect now)" % existing)
 
     work = tempfile.mkdtemp(prefix="local-tts-pronounce-")
-    keep = args.keep
+    keep = args.keep or not args.play
     try:
         # The baseline goes first for a reason beyond ordering: rendering it starts a
         # persistent server if one is configured, and `supports_phonetics` asks a server
@@ -839,7 +905,18 @@ def pronounce_command(argv):
             else:
                 print("phonemes   : every one is in this model's vocabulary")
             trial = json.loads(json.dumps(cfg))
-            trial.setdefault("pronunciations", {})[word] = candidate
+            # Put the trial at the same language scope as the command we print to
+            # keep it. A bare trial key loses to an existing scoped respelling and
+            # makes the purported A/B comparison synthesize the baseline twice.
+            scope = config.normalize_language(args.lang)[0]
+            entries = trial.setdefault("pronunciations", {})
+            for key in list(entries):
+                head, separator, term = key.partition(":")
+                key_scope = config.normalize_language(head)[0] if separator else ""
+                if key_scope == scope and (term if separator else head).strip().lower() == word.lower():
+                    del entries[key]
+            trial_key = "%s:%s" % (scope, word) if scope else word
+            entries[trial_key] = candidate
             rendered.append(("with the candidate",
                              _render_once("with IPA", name, trial, sentence,
                                           args, voice, os.path.join(work, "1.wav"))))
@@ -917,7 +994,7 @@ def servers_command(argv):
         print("     wrote the current script%s" % ("; previous kept as %s" % _short(backup)
                                                    if backup else ""))
         if alive:
-            if servers.shutdown(record["url"]):
+            if servers.shutdown(record["url"]) and servers.wait_stopped(record["url"]):
                 print("     stopped the running server; the next call starts the new one")
             else:
                 print("     the running server predates /shutdown, so it is still the old "
@@ -1087,6 +1164,16 @@ def config_command(argv):
     return 0
 
 
+def settings_command(argv):
+    from localtts import tui
+    return tui.command(argv)
+
+
+def warm_command(argv):
+    from localtts import warming
+    return warming.command(argv, speak)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Bare `tts` at a prompt is someone asking what the tool can do, not an empty
@@ -1105,6 +1192,10 @@ def main(argv=None):
                 "hooks": hooks_command,
                 "servers": servers_command,
                 "pronounce": pronounce_command,
+                "calibrate": calibration.command,
+                "cache": cache.command,
+                "warm": warm_command,
+                "settings": settings_command,
                 "playback": playback_command,
             }.get(argv[0])
             if handler is None:      # stop / pause / resume are shortcuts

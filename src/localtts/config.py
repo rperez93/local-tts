@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 
@@ -25,6 +26,16 @@ DEFAULTS = {
     # "windows" (or "powershell") selects the Windows player explicitly -- worth setting
     # on a WSL box where the Linux audio bridge is noisier than reaching out to Windows.
     "player": "",
+    "cache_enabled": False,
+    "cache_ttl_hours": 36.0,
+    "cache_max_mb": 256.0,
+    "cache_policy": "lfu",
+    "warm_keep_alive_seconds": 0,
+    "warm_interval_seconds": 10.0,
+    "tui_refresh_seconds": 1.0,
+    "cache_dir": "",
+    "cache_revision": "",
+    "ending_silence_ms": 0,  # Optional final WAV padding; never between fragments.
     # Per-machine tuning for whichever player is used, keyed by player name, e.g.
     #   {"ffplay": ["-af", "aresample=48000"]}
     # Inserted just before the file argument. Audio stacks differ per box (WSL's pulse
@@ -203,6 +214,9 @@ DEFAULTS = {
             "method": "",           # pitch extraction: harvest, crepe, rmvpe, pm; "" => rvc-python's default
             "index_rate": None,     # None => let rvc-python use its own default
             "protect": None,
+            # Per-language conversion overrides, separate from pacing. Requests are
+            # isolated so tuning Spanish never changes the next English utterance.
+            "conversion": {},         # {"es": {"index_rate": 0.65, "protect": 0.2}}
             "extra_args": [],
             # Optional: talk to a persistent server that keeps the model (and torch
             # itself) loaded, instead of paying that load cost -- seconds, not
@@ -264,7 +278,9 @@ DEFAULTS = {
 
 
 TOP_LEVEL_KEYS = ("provider", "play", "player", "terminal_title", "stream",
-                  "player_args", "player_env", "pronunciations",
+                  "player_args", "player_env", "ending_silence_ms", "pronunciations",
+                  "cache_enabled", "cache_ttl_hours", "cache_max_mb", "cache_dir", "cache_revision",
+                  "cache_policy", "warm_keep_alive_seconds", "warm_interval_seconds", "tui_refresh_seconds",
                   "phonetics_hooks", "phonetics_hook_timeout")
 #: Top-level settings that are maps, so `--set` takes one more level:
 #: `player_args.ffplay="-af aresample=48000"`, `player_env.SDL_AUDIODRIVER=pulseaudio`.
@@ -310,7 +326,10 @@ def _deep_merge(base, override):
 def _coerce(raw, current):
     """Turn a string from the environment or --set into the right type."""
     if isinstance(current, bool):
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        value = raw.strip().lower()
+        if value not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+            raise TTSError("expected true or false, got %r" % raw)
+        return value in ("1", "true", "yes", "on")
     if isinstance(current, int) and not isinstance(current, bool):
         return int(raw)
     if isinstance(current, float):
@@ -368,7 +387,13 @@ def load():
         if not isinstance(user, dict):
             raise TTSError("config in %s must be a JSON object" % path)
         cfg = _deep_merge(cfg, user)
-    return _apply_env(cfg)
+    validate_structure(cfg)
+    try:
+        cfg = _apply_env(cfg)
+    except (ValueError, TypeError) as exc:
+        raise TTSError("invalid environment setting: %s" % exc)
+    validate(cfg)
+    return cfg
 
 
 def normalize_language(code):
@@ -414,6 +439,20 @@ def read_user_config():
 
 
 def set_values(assignments):
+    from localtts import lock
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + ".lock", "a+b") as handle:
+        lock.acquire(handle)
+        try:
+            return _set_values_unlocked(assignments)
+        except (ValueError, TypeError) as exc:
+            raise TTSError("invalid setting: %s" % exc)
+        finally:
+            lock.release(handle)
+
+
+def _set_values_unlocked(assignments):
     """Persist "key=value" or "provider.key=value" pairs. Returns the new config."""
     user = read_user_config()
     for item in assignments:
@@ -485,6 +524,21 @@ def set_values(assignments):
                     % (sub, provider, ", ".join(sorted(known)))
                 )
             bucket = user.setdefault("providers", {}).setdefault(provider, {})
+            if entry and sub in ("delivery", "conversion") and "." in entry:
+                language, field = entry.split(".", 1)
+                if sub == "delivery":
+                    from localtts.providers.rvc import DELIVERY_DEFAULTS
+                    fields = DELIVERY_DEFAULTS
+                else:
+                    fields = {"pitch": 0, "index_rate": 0.0, "protect": 0.0}
+                if field not in fields:
+                    raise TTSError("unknown %s field %r" % (sub, field))
+                target = bucket.setdefault(sub, {}).setdefault(language, {})
+                if not isinstance(target, dict):
+                    raise TTSError("%s.%s.%s must be an object" % (provider, sub, language))
+                if raw == "": target.pop(field, None)
+                else: target[field] = _coerce(raw, fields[field])
+                continue
             if entry:
                 target = bucket.setdefault(sub, {})
                 if not isinstance(target, dict):
@@ -516,7 +570,16 @@ def set_values(assignments):
 
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(user, indent=2) + "\n", encoding="utf-8")
+    validate(_deep_merge(DEFAULTS, user))
+    fd, pending = tempfile.mkstemp(prefix=".local-tts-config-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(user, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(pending, path)
+    finally:
+        if os.path.exists(pending): os.unlink(pending)
     return user
 
 
@@ -582,3 +645,47 @@ def detect_migrations(cfg):
             "was_default": cfg.get("provider") == "command",
         })
     return found
+
+
+def validate(cfg):
+    """Shared validation for runtime controls edited by the CLI or terminal UI."""
+    import math
+    validate_structure(cfg)
+    for key, low, high in (("ending_silence_ms", 0, 5000),
+                           ("cache_ttl_hours", .001, 87600),
+                           ("cache_max_mb", .001, 1048576),
+                           ("warm_keep_alive_seconds", 0, 86400),
+                           ("warm_interval_seconds", .1, 60),
+                           ("tui_refresh_seconds", .1, 60)):
+        try:
+            value = float(cfg[key])
+            if not math.isfinite(value) or not low <= value <= high: raise ValueError
+        except (ValueError, TypeError):
+            raise TTSError("%s must be between %s and %s" % (key, low, high))
+    if cfg["cache_policy"] not in ("lfu", "lru"):
+        raise TTSError("cache_policy must be lfu or lru")
+
+
+def validate_structure(cfg):
+    for key in ("providers", "languages", "pronunciations", "player_args", "player_env"):
+        if not isinstance(cfg.get(key, {}), dict):
+            raise TTSError("%s must be a JSON object" % key)
+    for language, entry in cfg.get("languages", {}).items():
+        if not isinstance(entry, dict): raise TTSError("languages.%s must be an object" % language)
+    for name, options in cfg["providers"].items():
+        if not isinstance(options, dict): raise TTSError("providers.%s must be an object" % name)
+        for key, default in DEFAULTS["providers"].get(name, {}).items():
+            value = options.get(key, default)
+            if isinstance(default, dict) and not isinstance(value, dict):
+                raise TTSError("%s.%s must be an object" % (name, key))
+        for kind in ("delivery", "conversion"):
+            for lang, values in (options.get(kind) or {}).items():
+                if not isinstance(values, dict):
+                    raise TTSError("%s.%s.%s must be an object" % (name, kind, lang))
+        if "speed" in options and options["speed"] is not None:
+            import math
+            try:
+                speed = float(options["speed"])
+                if not math.isfinite(speed) or speed <= 0: raise ValueError
+            except (ValueError, TypeError):
+                raise TTSError("%s.speed must be positive" % name)

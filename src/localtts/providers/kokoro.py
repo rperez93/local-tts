@@ -152,7 +152,7 @@ class KokoroProvider(Provider):
                 # which made <whisper> merely slow instead of quiet.
                 if profile and profile["volume"] != 1.0:
                     audiofx.apply_profile(part, speed=1.0, volume=profile["volume"])
-                self.emit_part(part)
+                self.emit_part(part, final=part == parts[-1])
             audiomod.concat_wavs(parts, out_path)
         finally:
             for part in parts:

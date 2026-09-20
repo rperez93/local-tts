@@ -34,7 +34,7 @@ streaming   : on -- each fragment plays as it is synthesized
 
 | Line says | Then |
 | --- | --- |
-| `tone shaping: built-in WSOLA` | ffmpeg is missing. Every tone tag that changes pacing is retimed in pure Python. This is the single most common cause of "robotic" — offer `sudo apt install ffmpeg`, ask first. |
+| `tone shaping: built-in WSOLA` | ffmpeg is missing. Every tone tag that changes pacing is retimed in pure Python. This can introduce artifacts when rate-changing tags are used. Compare plain and tagged speech before attributing the problem to retiming; install ffmpeg if the evidence supports it. |
 | `players` lists more than one | The `-> using X` half tells you which is actually in play. A wrong pick here is the most common cause of "noisy" or "crackly". |
 | `player tuning:` present | Someone has already tuned this machine; read it before adding more. |
 
@@ -49,14 +49,14 @@ Work down this table. The first column is what the user actually says.
 | like the wrong language / wrong accent | language memory or per-language voice | `tts languages`, `<provider>.language_voices` |
 | too fast / too slow | `delivery.speed`, or the provider's own rate | `speed` in `rvc.delivery.<lang>` |
 | choppy, gappy, "stalls between words" | `pause_ms` / `trim_ms`, or fragments carrying their own dead air | the pacing section below |
-| flat, no emotion | tone tags not being used at all, or a backend that cannot realize them | `local-tts-speak` covers writing tags |
+| flat, no emotion | the selected voice/model or a backend with limited expressive control | `local-tts-speak` covers writing tags |
 | a borrowed English word said with the wrong phonetics | language tags off, or that language not configured | the borrowed-word section below |
 | a borrowed word said with the wrong phonetics | no IPA entry for it in the dictionary | `pronunciations.<word>=/…/` |
 
 ## Isolating a noisy player (2 plays, no guessing)
 
-Noise is almost never the synthesis — it is the playback path. Prove it with one file
-played two ways. Use **plain untagged text**, so tone shaping is out of the picture:
+Noise can originate in synthesis, voice conversion, retiming, or playback. Isolate the
+player by playing the same file two ways. Use **plain untagged text**, so tone shaping is out of the picture:
 
 ```bash
 tts -p piper --no-play -o /tmp/ab.wav "The quick brown fox jumps over the lazy dog."
@@ -81,8 +81,8 @@ tts config --set player_args.ffplay=          # empty removes it
 
 ## Pacing: speed, pauses, and dead air
 
-These live per language, so Spanish and English can differ — they genuinely should, since
-Spanish runs faster with shorter gaps:
+These live per language, so Spanish and English can differ. Measure the selected voice and use listening feedback
+to choose the rate and gaps; do not impose a language-wide speed assumption:
 
 ```bash
 tts config --set 'rvc.delivery.es={"speed": 1.0, "pause_ms": 45, "pause_tone_ms": 130, "trim_ms": 10}'
@@ -202,3 +202,29 @@ which settings you changed and what each one does — they will want to undo or 
 later, and a setting they cannot name is a setting they cannot keep. If you changed
 nothing because the measurements were clean, say that too; "I could not reproduce it, here
 is what I measured" is a real answer.
+
+## Record a reproducible baseline
+
+Use `tts calibrate --provider kokoro --provider rvc` when those local backends are
+configured. It saves initial and repeated renders of every remembered language and
+prints the report path; it does not play or change settings. Select a single language
+and the user's actual sentence with `--lang es --text '...'` for pronunciation work.
+Review errors as well as timing, silence and clipping. First-fragment time measures
+readiness, not audible playback latency. Warmup can reduce initial model-loading delay;
+it cannot repair pronunciation or establish naturalness. Do not treat low latency,
+no clipping, or a passing test suite as proof that speech sounds human.
+
+Compare the same sentence in the base and converted voices before attributing robotic
+sound to a missing dictionary. Change one variable and play exactly two versions.
+Persist only supported pronunciation entries or settings backed by the comparison.
+
+## Startup latency and abrupt endings
+
+Separate cold model loading, synthesis, cache lookup, player startup, and playback
+queueing. Compare --no-play renders before blaming the player. tts warm --lang CODE
+loads the configured model; --keep-alive SECONDS keeps it resident for a bounded period.
+tts cache status shows bounded audio-cache usage; --verbose reports hit/miss.
+A cache hit does not prove playback has begun or that the user heard it.
+For endings, compare the exact WAV with and without trailing silence. If the padded
+version is preferred, save ending_silence_ms=350 (or the measured preferred value).
+It applies once to the final WAV fragment; it cannot restore missing synthesized sounds.

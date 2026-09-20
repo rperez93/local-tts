@@ -64,7 +64,8 @@ the subprocess and HTTP layers. You *do* need one to check that audio actually c
 python -m unittest discover -s tests -v
 ```
 
-311 tests, no test dependencies, no network, no audio device. They must all pass before
+The suite has no test dependencies and uses local mock servers, not external speech
+services or an audio device. They must all pass before
 you open a pull request, and they should stay fast — if a test needs a real model, a real
 player or a real API, it does not belong in this suite; fake the boundary instead. The
 existing tests show the patterns: a stub binary on `PATH`, a local HTTP server, a
@@ -168,3 +169,19 @@ agree, so update both:
 - `src/localtts/__init__.py` → `__version__`
 
 Then a `Bump version to X.Y.Z` commit and a matching tag.
+
+## v2 publishing
+
+The PyPI distribution is `agents-local-tts` (Python import `localtts`, commands `tts`
+and `local-tts`). Update both version declarations, test and build the wheel/sdist,
+then tag and publish a GitHub release. `.github/workflows/python-publish.yml` tests,
+checks version/tag consistency, builds distributions and publishes with PyPI trusted
+publishing through the `pypi` GitHub environment. No API token is stored in the repo.
+The PyPI publisher must match owner `rperez93`, repository `local-tts`, workflow
+`python-publish.yml`, environment `pypi`. Manual dispatch must target the version tag.
+
+Cache changes need key-invalidation, TTL, eviction, corruption and CLI integration
+tests. Settings changes belong in `docs/settings.md`, README and the configure skill.
+Native agent paths require primary documentation and installation/migration tests.
+Do not claim a hot reload of loaded server startup state: request settings reload,
+while startup-only changes wait for the next server start.

@@ -2058,38 +2058,38 @@ class SkillInstallTest(unittest.TestCase):
         self.assertEqual(skills.status("claude-code", base=self.base)[0], True)
 
     def test_doc_shaped_agent_preserves_existing_content(self):
-        os.makedirs(os.path.join(self.base, ".codex"))
-        target = os.path.join(self.base, ".codex", "AGENTS.md")
+        os.makedirs(os.path.join(self.base, ".cursor", "rules"))
+        target = os.path.join(self.base, ".cursor", "rules", "local-tts.mdc")
         with open(target, "w") as fh:
             fh.write(SAMPLE_RULES)
-        skills.install("codex", base=self.base)
+        skills.install("cursor", base=self.base)
         body = open(target).read()
         self.assertIn("Always use tabs.", body)
-        self.assertIn(skills.BEGIN, body)
+        self.assertNotIn(skills.BEGIN, body)
 
     def test_reinstall_does_not_duplicate_the_section(self):
-        os.makedirs(os.path.join(self.base, ".codex"))
-        skills.install("codex", base=self.base)
-        first = open(os.path.join(self.base, ".codex", "AGENTS.md")).read()
-        skills.install("codex", base=self.base)
-        second = open(os.path.join(self.base, ".codex", "AGENTS.md")).read()
+        os.makedirs(os.path.join(self.base, ".cursor", "rules"))
+        skills.install("cursor", base=self.base)
+        first = skills.target_paths(skills.SKILLS[0], "cursor", self.base).read_text()
+        skills.install("cursor", base=self.base)
+        second = skills.target_paths(skills.SKILLS[0], "cursor", self.base).read_text()
         self.assertEqual(first, second)
-        self.assertEqual(second.count(skills.BEGIN), 1)
+        self.assertEqual(second.count("name: " + skills.SKILLS[0]), 1)
 
     def test_uninstall_restores_the_original_file(self):
-        os.makedirs(os.path.join(self.base, ".codex"))
-        target = os.path.join(self.base, ".codex", "AGENTS.md")
+        os.makedirs(os.path.join(self.base, ".cursor", "rules"))
+        target = os.path.join(self.base, ".cursor", "rules", "local-tts.mdc")
         with open(target, "w") as fh:
             fh.write(SAMPLE_RULES)
-        skills.install("codex", base=self.base)
-        skills.uninstall("codex", base=self.base)
+        skills.install("cursor", base=self.base)
+        skills.uninstall("cursor", base=self.base)
         self.assertEqual(open(target).read().strip(), SAMPLE_RULES.strip())
 
     def test_uninstall_removes_a_file_it_created_alone(self):
-        os.makedirs(os.path.join(self.base, ".codex"))
-        skills.install("codex", base=self.base)
-        skills.uninstall("codex", base=self.base)
-        self.assertFalse(os.path.exists(os.path.join(self.base, ".codex", "AGENTS.md")))
+        os.makedirs(os.path.join(self.base, ".cursor", "rules"))
+        skills.install("cursor", base=self.base)
+        skills.uninstall("cursor", base=self.base)
+        self.assertFalse(os.path.exists(os.path.join(self.base, ".cursor", "rules", "local-tts.mdc")))
 
     def test_dry_run_writes_nothing(self):
         os.makedirs(os.path.join(self.base, ".claude"))
@@ -2372,6 +2372,18 @@ class PronunciationTest(unittest.TestCase):
         longer recognizes -- which would change what is spoken, not just how."""
         self.assertEqual(self.say("<happy>Fine</happy>"), "<happy>Fine</happy>")
         self.assertEqual(self.say("<happy>happy</happy>"), "<happy>HAP-ee</happy>")
+
+    def test_regional_pronunciation_wins_in_either_dictionary_order(self):
+        entries = {"en-US:route": "root", "en:route": "rowt", "route": "general"}
+        for ordered in (entries, dict(reversed(list(entries.items())))):
+            for lang in ("en-US", "en_US", "EN-us"):
+                self.assertEqual(textutil.apply_pronunciations("route", ordered, lang), "root")
+            self.assertEqual(textutil.apply_pronunciations("route", ordered, "en-GB"), "rowt")
+
+    def test_regional_ipa_and_underscore_scopes(self):
+        entries = {"es_MX:word": "/regional/", "es:word": "/base/"}
+        self.assertEqual(textutil.phonetic_entries(entries, "es-MX"), {"word": "regional"})
+        self.assertEqual(textutil.phonetic_entries(entries, "es-ES"), {"word": "base"})
 
     def test_escapes_survive(self):
         self.assertEqual(self.say(r"a \<b\> jarvis"), r"a \<b\> JAR-viss")
@@ -3125,6 +3137,32 @@ class PronounceTest(unittest.TestCase):
         code, printed = self.run_cli(["pronounce", "x", "--no-play", "--ipa", "/abZ/"])
         self.assertEqual(code, 0)
         self.assertIn("no token for 'Z'", printed)
+
+    def test_trial_overrides_scoped_respelling_without_changing_saved_dictionary(self):
+        server = _FakeAudioServer("/synthesize", audio_bytes=_wav_bytes(1),
+                                  capabilities={"ok": True, "phonetics": True}, vocab="abc")
+        self.addCleanup(server.stop)
+        original = self.configure(server, languages={"es-MX": {"provider": "kokoro"}},
+                                  pronunciations={"es:word": "base", "ES_mx:WORD": "regional"})
+        code, printed = self.run_cli(["pronounce", "word", "--lang", "es-MX",
+                                      "--no-play", "--ipa", "/abc/"])
+        self.assertEqual(code, 0)
+        self.assertEqual(server.requests[0]["text"], "regional")
+        self.assertEqual(server.requests[1]["text"], "word")
+        self.assertEqual(server.requests[1]["phonetics"], {"word": "abc"})
+        with open(self.path) as handle:
+            self.assertEqual(json.load(handle), original)
+        directory = printed.split("files      : ")[-1].strip()
+        self.assertTrue(os.path.isfile(os.path.join(directory, "0.wav")))
+        self.assertTrue(os.path.isfile(os.path.join(directory, "1.wav")))
+        import shutil
+        shutil.rmtree(directory)
+
+    def test_substring_is_not_a_pronunciation_match(self):
+        self.configure()
+        code, printed = self.run_failing(["pronounce", "cat", "--sentence", "concatenate"])
+        self.assertEqual(code, 1)
+        self.assertIn("does not appear", printed)
 
     def test_a_server_without_vocab_says_it_cannot_answer(self):
         server = _FakeAudioServer("/synthesize", audio_bytes=_wav_bytes(1),

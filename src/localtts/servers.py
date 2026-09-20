@@ -135,3 +135,20 @@ def shutdown(url, timeout=2):
         # Cut off mid-answer, or already gone. Either way nothing is serving that port,
         # which is what was being asked for.
         return True
+
+
+def wait_stopped(url, timeout=5):
+    """Wait for the shutdown acknowledgement to become an actually closed listener."""
+    import http.client
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=.2):
+                pass
+        except urllib.error.HTTPError:
+            pass
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
+            return True
+        time.sleep(.05)
+    return False

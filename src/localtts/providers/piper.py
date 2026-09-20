@@ -95,7 +95,7 @@ class PiperProvider(Provider):
         try:
             for (chunk, profile), part in zip(segments, parts):
                 self._run_one(chunk, part, voice, self._prosody_overrides(profile))
-                self.emit_part(part)
+                self.emit_part(part, final=part == parts[-1])
             audiomod.concat_wavs(parts, out_path)
         finally:
             for part in parts:
