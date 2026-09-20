@@ -136,9 +136,9 @@ kokoro approximate it with pacing (and, for piper, volume). On backends with no 
 their own (`llamacpp`, `rvc`) the tag's speed and volume are applied to the rendered audio
 afterwards instead, so a tag is still audible there rather than being a no-op. `rvc`
 converts each tagged span separately for exactly this reason. The markup itself is never
-spoken literally on any backend. This means tags are
-always safe to use regardless of which backend is currently configured; you don't need to
-check first.
+spoken literally on any backend. Tone markup is not spoken literally. However, rate and gain changes do not reproduce
+natural emotion, and many short spans can sound choppy. Prefer complete phrases and
+use tags sparingly; compare the untagged voice when speech sounds robotic.
 
 If a user consistently wants their own text (already containing sentences that read as
 questions or exclamations) to sound that way automatically, without you adding tags by hand,
@@ -343,3 +343,22 @@ run the commands one at a time.
 - **Never read secrets aloud** — tokens, keys, passwords — even if they appear in the text
   you were asked to narrate. Skip them and say you did.
 - Speech is written to a temp file and deleted after playing, unless `-o` or `--keep`.
+
+### Keep phrases intact and select the language explicitly
+
+Pass `--lang` for the language you are speaking so its voice and pronunciation memory
+apply. Use normal punctuation and complete phrases. On local backends, every tone-tag
+boundary may create a separate synthesis and conversion request; tags approximate
+expression through rate and gain and do not guarantee natural emotional delivery.
+Avoid tagging individual words or every sentence. For borrowed technical terms, use
+the shared pronunciation dictionary instead of splitting the sentence between voices.
+When the user reports robotic sound or latency, use the tuning skill and `tts calibrate`
+to compare initial and repeated renders before adding more tags or changing settings.
+
+## Cached speech and startup
+
+Keep passing explicit --lang. An enabled audio cache and saved ending-silence setting
+apply automatically to ordinary tts calls; do not manually add silence or bypass the
+cache for routine speech. Use --no-cache for an intentional fresh comparison. For
+slow first requests, check tts cache status and tts warm --help. Warming is silent;
+keep-alive is bounded and consumes model memory. Do not start an indefinite process.

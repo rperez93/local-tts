@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import time
+import wave
 
 from localtts import audio, lock
 
@@ -66,6 +67,22 @@ def run_stream(argv):
             while True:
                 part = audio.stream_part_path(stream_dir, index)
                 if os.path.exists(part):
+                    # Consume already-ready neighbors in one player process. In
+                    # particular, launching PowerShell once per short tone span adds
+                    # an audible stall even when synthesis is comfortably ahead.
+                    # Never wait to fill a batch: the first ready fragment starts now.
+                    parts = [part]
+                    while os.path.exists(audio.stream_part_path(stream_dir, index + len(parts))):
+                        candidate = audio.stream_part_path(stream_dir, index + len(parts))
+                        # Different formats were playable separately; preserve that
+                        # behavior instead of making batching a new failure mode.
+                        with wave.open(part, "rb") as first, wave.open(candidate, "rb") as next_part:
+                            if first.getparams()[:3] != next_part.getparams()[:3]:
+                                break
+                        parts.append(candidate)
+                    if len(parts) > 1:
+                        part = os.path.join(stream_dir, "batch.wav")
+                        audio.concat_wavs(parts, part, gap_seconds=0)
                     cmd = audio.find_player(part, preferred)
                     if not cmd:
                         break
@@ -80,7 +97,7 @@ def run_stream(argv):
                         painted = True
                     _play(cmd)
                     elapsed += audio._safe_duration(part)
-                    index += 1
+                    index += len(parts)
                     continue
                 count = audio.stream_count(stream_dir)
                 if count is not None:

@@ -3,8 +3,8 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-tts"
-version = "1.10.0"
+name = "agents-local-tts"
+version = "2.0.0"
 description = "Ultralight CLI for local text-to-speech, powered by Kokoro by default"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -18,6 +18,11 @@ classifiers = [
 ]
 # No runtime dependencies. Standard library only, on purpose.
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/rperez93/local-tts"
+Repository = "https://github.com/rperez93/local-tts"
+Issues = "https://github.com/rperez93/local-tts/issues"
 
 [project.scripts]
 tts = "localtts.cli:main"

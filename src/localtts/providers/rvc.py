@@ -131,16 +131,34 @@ class RvcProvider(Provider):
         method = self.settings.get("method")
         if method:
             cmd += ["-me", method]
-        pitch = self.settings.get("pitch")
+        conversion = self.conversion()
+        pitch = conversion.get("pitch")
         if pitch:
             cmd += ["-pi", str(pitch)]
-        index_rate = self.settings.get("index_rate")
+        index_rate = conversion.get("index_rate")
         if index_rate is not None:
             cmd += ["-ir", str(index_rate)]
-        protect = self.settings.get("protect")
+        protect = conversion.get("protect")
         if protect is not None:
             cmd += ["-pr", str(protect)]
         return cmd + list(self.settings.get("extra_args") or [])
+
+    def conversion(self):
+        allowed = {"pitch", "index_rate", "protect"}
+        values = {key: self.settings.get(key) for key in ("index_rate", "protect")}
+        # A flat zero historically means "use the server startup pitch". A scoped
+        # conversion entry can explicitly request zero without changing that default.
+        if self.settings.get("pitch"):
+            values["pitch"] = self.settings["pitch"]
+        mapping = self.settings.get("conversion") or {}
+        chosen = self.for_language(mapping, mapping.get("*") or {})
+        if not isinstance(chosen, dict):
+            raise TTSError("rvc.conversion entries must be objects")
+        unknown = set(chosen) - allowed
+        if unknown:
+            raise TTSError("unknown RVC conversion settings: %s" % ", ".join(sorted(unknown)))
+        values.update(chosen)
+        return values
 
     def synthesize(self, text, out_path, voice=None):
         from localtts import audio as audiomod
@@ -180,7 +198,7 @@ class RvcProvider(Provider):
                     changing = profile != segments[index + 1][1]
                     gap = delivery["pause_tone_ms"] if changing else delivery["pause_ms"]
                     audiofx.append_silence(part, gap / 1000.0)
-                self.emit_part(part)
+                self.emit_part(part, final=part == parts[-1])
             audiomod.concat_wavs(parts, out_path, gap_seconds=0)
         finally:
             for part in parts:
@@ -276,9 +294,18 @@ class RvcProvider(Provider):
             # A single-model server (or an older one) simply ignores this key, so
             # naming a voice is always safe to send.
             payload["model"] = model_name
-        pitch = self.settings.get("pitch")
-        if pitch:
-            payload["pitch"] = pitch
+        conversion = self.conversion()
+        advanced = any(conversion.get(key) is not None for key in ("index_rate", "protect"))
+        if advanced or self.settings.get("conversion"):
+            capabilities = getattr(self, "_conversion_capabilities", None)
+            if capabilities is None:
+                capabilities = self.server_capabilities(server_url) or {}
+                self._conversion_capabilities = capabilities
+            if not capabilities.get("conversion_parameters"):
+                raise TTSError("RVC server cannot apply conversion overrides; run `tts servers --refresh`")
+            payload.update({key: value for key, value in conversion.items() if value is not None})
+        elif conversion.get("pitch"):
+            payload["pitch"] = conversion["pitch"]
         device = self.settings.get("device")
         if device:
             payload["device"] = str(device)

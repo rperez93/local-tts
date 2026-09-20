@@ -86,3 +86,6 @@ models/
 *.onnx.json
 *.pth
 *.index
+
+# Phonemizer scratch session
+:memory:.ses

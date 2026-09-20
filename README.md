@@ -1,11 +1,13 @@
 # local-tts
 
 <p align="center">
-  <img src="assets/logo.jpg" alt="local-tts logo" width="160">
+  <img src="https://raw.githubusercontent.com/rperez93/local-tts/main/assets/logo.jpg" alt="local-tts logo" width="160">
 </p>
 
 <p align="center">
   <a href="https://www.producthunt.com/products/localtts?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-local-tts" target="_blank" rel="noopener noreferrer"><img alt="local-tts - Make your coding agent talk to you! Offline! | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1230101&amp;theme=neutral&amp;t=1787592484631"></a>
+  <br>
+  <a href="https://pypi.org/project/agents-local-tts/" target="_blank" rel="noopener noreferrer"><img alt="PyPI" src="https://img.shields.io/pypi/v/agents-local-tts.svg?color=0ea5e9"></a>
   <br>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-blue.svg">
@@ -142,6 +144,20 @@ Each backend points at its own weights through its own settings; see its section
 
 ## Install
 
+Install the published package in an isolated environment:
+
+```bash
+pipx install agents-local-tts
+# or, inside your own virtual environment:
+python -m pip install agents-local-tts
+```
+
+The distribution is `agents-local-tts`; commands remain `tts` and `local-tts`, and
+imports remain `localtts`. Speech models are installed separately. For development,
+clone the repository and use the editable install below. Legacy source installations
+named `local-tts` should uninstall that distribution before installing the renamed
+package in the same environment, to avoid competing entry points.
+
 Everything happens inside a virtual environment so nothing touches your system Python.
 
 ```bash
@@ -238,9 +254,10 @@ the slower built-in fallback is, and `phonetics` says which backends can accept 
 
 ## Updating
 
-There's no auto-update and no PyPI package — `local-tts` lives in the git clone from
-[Install](#install). Updating means pulling that repo, plus refreshing the couple of things
-that are copies of it rather than live links.
+For a PyPI installation, run `pipx upgrade agents-local-tts` (or
+`python -m pip install --upgrade agents-local-tts` in its environment). Source installations
+use the git workflow below. Both need `tts skills --install` and `tts servers --refresh`
+to refresh copied resources. There is no automatic package update.
 
 ```bash
 cd local-tts               # the repo you cloned in Install
@@ -386,7 +403,7 @@ native Windows they report that they are unsupported and `stop` is the control.
 
 ## Coding-agent skills
 
-`local-tts` ships three skills that teach a coding agent to use it, and installs them into
+`local-tts` ships five skills that teach a coding agent to use it, and installs them into
 whichever agents it finds on your machine:
 
 - **`local-tts-speak`** — speak to the user. Triggers on "talk to me", "read this aloud",
@@ -434,19 +451,19 @@ Restart the agent (or open a new session) afterwards so it picks them up.
 | Gemini CLI | `~/.gemini/skills/<name>/SKILL.md` |
 | OpenCode | `<config>/opencode/skills/<name>/SKILL.md` |
 | Qwen Code | `~/.qwen/skills/<name>/SKILL.md` |
-| Codex CLI | section in `~/.codex/AGENTS.md` |
-| Cursor | `~/.cursor/rules/local-tts.mdc` |
-| Windsurf | `~/.codeium/windsurf/memories/local-tts.md` |
-| GitHub Copilot | `<config>/github-copilot/local-tts-instructions.md` |
+| Codex CLI | `~/.agents/skills/local-tts-*/SKILL.md` |
+| Cursor | `~/.cursor/skills/<name>/SKILL.md` |
+| Windsurf | `~/.codeium/windsurf/skills/<name>/SKILL.md` |
+| GitHub Copilot | `~/.copilot/skills/<name>/SKILL.md` |
 
 `<config>` is `%APPDATA%` on Windows and `~/.config` on Linux and macOS
 (`$XDG_CONFIG_HOME` wins on any platform when set). Detection only writes where the agent's
 directory already exists, so nothing is created for agents you do not use.
 
-Agents with a real skill mechanism get one file per skill. Agents that read a single flat
-instructions file get a block delimited by `<!-- BEGIN local-tts skills -->` markers —
-**anything already in that file is preserved**, reinstalling replaces only the block, and
-`--uninstall` removes it and leaves the rest untouched.
+All listed agents receive native skills. Reinstalling all skills migrates older managed
+Codex, Cursor, Windsurf and Copilot instruction blocks, preserves unrelated content,
+and backs up the old file. Agent permissions and skill discovery remain controlled by
+the agent; restart its session after installing. See [verified integration paths](docs/agents.md).
 
 ## Status-bar hook
 
@@ -1237,7 +1254,7 @@ phonemes   : no token for "'" -- it is dropped, and the word comes out mangled r
 
 That is nearly always a real typo — `'` for `ˈ`, `r` for `ɹ`, `:` for `ː`. Add `--sentence
 "quiero un croissant"` to hear the word in context, `--no-play` to render without playing,
-and `--keep` to hold on to both wav files. Asking which phonemes exist needs a current
+which retains both WAV files and prints their directory. With playback, use `--keep` to retain the files. Asking which phonemes exist needs a current
 kokoro server (`tts servers`); without one you still get both renders, with a line saying
 the vocabulary could not be checked.
 
@@ -1470,3 +1487,123 @@ no-runtime-dependencies rule, which is not negotiable.
 ## License
 
 MIT
+
+### Repeatable language calibration
+
+Run `tts calibrate` to save two speech samples for every remembered language and a
+`report.json` with render time, first-fragment readiness, duration, edge silence,
+levels, and hard clipping. It never plays audio or changes your preferences. Models
+may start automatically, just as when speaking. The second run helps separate initial
+loading costs from repeated requests; the first run may already have a warm server.
+
+```bash
+tts calibrate --provider kokoro --provider rvc
+tts calibrate --lang es --text 'Revisé el pull request y el despliegue está listo.'
+```
+
+Use `--lang` and `--provider` repeatedly to select comparisons, `--runs` for repeat
+count, and `--output` for the parent directory of a new results folder. Languages
+without a built-in sample require `--text`. The measurements require PCM16 WAV;
+unsupported formats or synthesis failures are recorded as errors with a nonzero exit.
+First-fragment readiness excludes player startup and queue time. These statistics
+cannot establish pronunciation accuracy or naturalness: compare two recordings by ear
+before choosing a voice or dictionary entry. Keep the sentence and all other settings
+fixed during each comparison.
+
+Regional pronunciation entries override base-language entries regardless of their
+order in the config file. Language codes are case-insensitive and accept underscores:
+`en_US`, `EN-us`, and `en-US` select the same pronunciation and provider voice mappings.
+
+Streaming starts the first available fragment immediately. Subsequent contiguous
+fragments already available in the same WAV format are played together, avoiding a
+player launch between each short span. Batching adds no silence and never waits for
+another fragment to finish synthesizing.
+
+Codex skills use the native user skill directory documented by
+[OpenAI](https://learn.chatgpt.com/docs/build-skills). Reinstalling all five skills
+migrates the old local-tts block out of `~/.codex/AGENTS.md` after the native files
+have been written. Unrelated instructions stay intact and the old file is backed up
+as `AGENTS.md.local-tts.bak`. `--dry-run` previews this without changing files.
+
+Pronunciation trials use the requested language scope even when the dictionary already
+contains a regional respelling. Sentence matching requires a whole word, and the
+Kokoro server supports IPA for isolated words as well as sentences. Overlapping
+entries prefer the longest phrase. After updating, use `tts servers --refresh` to
+apply server fixes to an existing installation.
+
+### Vowel and consonant regression samples
+
+`tts calibrate --suite sounds --runs 1` renders connected speech covering Spanish
+R/RR, vowels, stops, fricatives, nasals, clusters, stress and questions, and analogous
+English contrasts. It uses the remembered profiles, including regional English,
+and never changes settings or plays audio. Other languages still use the basic
+sample or a custom `--text`; an unsupported sound suite fails explicitly.
+
+RVC can be tuned per language with
+`tts config --set 'rvc.conversion.es={"index_rate":0.65,"protect":0.2}'`.
+This example is a trial setting, not a universal quality recommendation. Updated
+servers accept these parameters per request and restore their startup values afterward.
+Refresh an older server with `tts servers --refresh`; unsupported tuning is reported
+instead of silently ignored. Scoped pitch zero explicitly disables a startup pitch shift.
+
+For optional unattended intelligibility checks, `tools/evaluate_speech.py` reads a
+calibration report and uses faster-whisper in a separate environment. It does not
+change runtime dependencies, upload recordings, play audio, or alter preferences.
+Word error rate can reveal lost words, but does not establish clear trills, accent,
+voice similarity, or naturalness. `tools/run_sound_sweep.py` renders controlled local
+comparisons from identical source waveforms.
+
+For an ending that feels cut short, `tts config --set ending_silence_ms=350`
+adds 350 ms of silence after the final WAV fragment. It also pads saved WAV output,
+but does not add gaps between fragments or delay the first streamed fragment.
+The default is 0 (disabled); accepted values are 0–5000 ms. Compressed output is
+unchanged. This gives playback a longer ending; it cannot restore speech already
+missing from synthesized audio.
+
+## Faster startup, audio caching and settings UI
+
+```bash
+tts settings                                  # terminal editor; changes save immediately
+tts config --set cache_enabled=true            # existing CLI remains supported
+tts config --set cache_ttl_hours=36 --set cache_max_mb=256
+tts config --set cache_policy=lfu               # or lru
+tts cache status                               # also prune / clear
+tts warm --lang en --lang es                    # load models, prefill sample phrases
+tts warm --lang en --text "The build is ready." --keep-alive 1800
+tts --lang en --no-cache "Render this fresh."
+```
+
+The disk cache skips synthesis for matching requests. It keys on text, language,
+voice/model, local asset size/mtime, output format, synthesis settings, pronunciation
+entries, ending padding, platform and implementation. Dynamic phonetics hooks bypass
+it. Use `cache_revision` or `tts cache clear` when a remote model changes at the same
+URL. Files have a fixed lifetime (36 hours by default), not a sliding expiration.
+The 256 MiB budget includes entry headers and audio; least-used entries go first,
+with oldest access breaking ties. Entries larger than the limit are not cached.
+Pruning runs on cache activity or `tts cache prune`; an idle directory may retain
+expired files until the next operation, but they are never served after expiration.
+The limit covers this cache, not explicit exports, retained background recordings,
+model weights, filesystem allocation overhead, or model RAM/VRAM. Transfers are
+buffered; the cache is not loaded into memory as a whole.
+
+Model warm-up reduces the cold-start cost for **new** phrases. Cache hits do not need
+resident models. `--keep-alive` runs visibly for a bounded period, never plays audio,
+and exits with Ctrl-C; it does not install a hidden daemon. Holding models warm uses
+RAM/VRAM. PowerShell process startup and queued playback still contribute latency.
+
+The terminal editor supports arrows/j/k, Enter to edit, `/` to filter, `a` to add a
+CLI-style assignment, and `q` to quit. All top-level settings, provider settings and
+language mappings are exposed. Lists/maps use JSON. API keys are masked. It reloads
+external edits automatically; the CLI reloads configuration on every request. Saves
+are atomic and serialized across processes. Active utterances keep their snapshot;
+new requests use new voices/settings. A running warm session reloads its plan.
+Backend **startup-only** settings (loaded models, port/device/start command) apply
+when that server next starts; editing them never kills an active utterance.
+
+See [the complete settings reference](docs/settings.md),
+[agent support](docs/agents.md), and [v2.0.0 migration/release notes](CHANGELOG.md).
+
+Resident local servers report the model assets and startup arguments they actually
+loaded. If those disagree with current settings/files, caching is bypassed until
+the server has restarted; old-model audio is not stored under the new identity.
+Opaque custom-server assets need explicit configuration or caching stays disabled.

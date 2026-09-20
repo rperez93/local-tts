@@ -340,19 +340,20 @@ def pronunciation_entries(entries, lang=""):
     map without needing a nested structure (and so `--set` can still reach one entry at
     a time). An exact tag beats its base language, matching the language memory.
     """
-    tag = (lang or "").strip().lower()
-    candidates = []
-    if tag:
-        candidates = [tag, tag.replace("_", "-"), tag.split("-")[0].split("_")[0]]
+    tag = (lang or "").strip().lower().replace("_", "-")
     general, scoped = {}, {}
     for key, value in (entries or {}).items():
         head, sep, word = str(key).partition(":")
         if not sep:
             general[key.lower()] = value
             continue
-        if head.strip().lower() in candidates:
-            scoped[word.strip().lower()] = value
-    general.update(scoped)          # a language-specific entry wins over a general one
+        scope = head.strip().lower().replace("_", "-")
+        scoped.setdefault(scope, {})[word.strip().lower()] = value
+    if tag:
+        # Apply broad entries first, independent of JSON insertion order. Normalize
+        # both sides so en_US and en-US describe the same regional pronunciation.
+        general.update(scoped.get(tag.split("-")[0], {}))
+        general.update(scoped.get(tag, {}))
     return general
 
 
@@ -524,7 +525,7 @@ def _synthesize_with_audiofx(provider, text, out_path, voice, on_progress):
                 provider.synthesize(strip_tone_tags(chunk), part, voice=voice)
                 audiofx.apply_profile(part, speed=speed, volume=volume)
                 if emit:
-                    emit(part)          # playable now; the rest are still being made
+                    (getattr(emit, "final", emit) if index == len(parts) - 1 else emit)(part)
                 if on_progress:
                     on_progress(index + 1, len(pending))
         audio.concat_wavs(parts, out_path)
@@ -590,7 +591,8 @@ def synthesize_chunked(provider, text, out_path, voice=None, on_progress=None):
             nonlocal next_to_emit
             finished.add(index)
             while next_to_emit in finished:
-                emit(parts[next_to_emit])
+                publish_part = getattr(emit, "final", emit) if next_to_emit == len(parts) - 1 else emit
+                publish_part(parts[next_to_emit])
                 next_to_emit += 1
 
         def synth_one(index):

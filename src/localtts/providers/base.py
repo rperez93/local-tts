@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import http.client
 import shlex
 import shutil
 import subprocess
@@ -89,7 +90,7 @@ class Provider:
     def synthesize(self, text, out_path, voice=None):
         raise NotImplementedError
 
-    def emit_part(self, path):
+    def emit_part(self, path, final=False):
         """Publish one finished, in-order fragment to the streaming sink, if any.
 
         Called by providers that render ordered parts internally (their own tone
@@ -98,7 +99,7 @@ class Provider:
         """
         sink = self.on_part
         if sink:
-            sink(path)
+            (getattr(sink, "final", sink) if final else sink)(path)
 
     def for_language(self, mapping, default=""):
         """This call's entry from a {language tag: value} map, or `default`.
@@ -108,12 +109,14 @@ class Provider:
         one. Shared because more than one provider maps per-language settings this way:
         rvc picks a resident voice model, kokoro picks a voice.
         """
-        tag = (self.lang or "").strip()
+        from localtts.config import normalize_language
+        tag, base = normalize_language(self.lang)
         if not tag or not mapping:
             return default
-        for candidate in (tag, tag.replace("_", "-"), tag.split("-")[0].split("_")[0]):
-            if candidate in mapping:
-                return mapping[candidate]
+        for candidate in (tag, base):
+            for stored, value in mapping.items():
+                if normalize_language(stored)[0] == candidate:
+                    return value
         return default
 
     def speed_settings(self, speed):
@@ -332,6 +335,8 @@ class Provider:
                            % (self.name, exc.code, url, path, body[:500]))
         except urllib.error.URLError as exc:
             raise TTSError("%s: could not reach %s%s: %s" % (self.name, url, path, exc.reason))
+        except (OSError, http.client.HTTPException) as exc:
+            raise TTSError("%s: connection to %s%s interrupted: %s" % (self.name, url, path, exc))
         if not audio:
             raise TTSError("%s server returned an empty response" % self.name)
         return audio

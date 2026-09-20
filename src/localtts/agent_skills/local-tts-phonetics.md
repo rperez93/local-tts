@@ -170,3 +170,29 @@ is the status-bar hook.
 | Right in isolation, wrong in a sentence | stress, or a respelling fighting the IPA | check for a second entry for the same word |
 | Correct in one language, wrong in another | a bare key applies to every language | scope it with `<lang>:<word>` |
 | An `<en>…</en>` span in old text | removed, not read aloud | rewrite it as a dictionary entry |
+
+## Save comparisons for review
+
+`tts pronounce WORD --lang CODE --ipa '/…/' --no-play` retains both recordings and
+prints their directory. The trial overrides the current entry only in memory, at the
+selected language scope. It never saves the candidate automatically. A vocabulary
+check establishes token support, not pronunciation accuracy; compare the recordings
+before persisting the winner. Use `tts servers --refresh` after upgrading if isolated
+word trials or overlapping phrase entries appear to ignore the dictionary.
+
+## Distinguish Spanish R/RR from English R
+
+Spanish tap `ɾ`, Spanish trill `r`, and English approximant `ɹ` are different sounds.
+Check the actual model vocabulary and phonemizer before replacing any of them. The
+installed Kokoro model supports all three; an ASCII `r` is not inherently an error
+for Spanish. If pero/perro already produce distinct tap/trill phonemes, adding the
+same dictionary entries will not repair weak articulation. Compare the identical
+base waveform before and after conversion to locate the loss, then test conversion
+settings or the base voice one at a time. Do not globally rewrite Spanish R as English R.
+
+## Cache-aware trials
+
+Pronunciation trials and calibration render directly, so they do not reuse cached
+CLI speech. Normal speech cache keys include pronunciation entries and model settings.
+After replacing a remote model at an unchanged URL, change cache_revision or clear
+the cache. Token support and recognizer scores still do not establish naturalness.

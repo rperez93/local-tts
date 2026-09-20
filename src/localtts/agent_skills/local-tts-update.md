@@ -5,12 +5,18 @@ description: Update an already-installed local-tts CLI to the latest version —
 
 # Updating `local-tts`
 
-local-tts has no auto-update and isn't published on PyPI — it lives in a git clone the
-user installed with `pip install -e .` (see `AGENT_INSTALL.md` in the repo). Updating means
-pulling that repo, then refreshing the few things that are **snapshots**, not symlinks, of
-its content.
+The PyPI distribution is `agents-local-tts`; commands remain `tts` and `local-tts`.
+For PyPI installs use `pipx upgrade agents-local-tts` or the owning environment's
+`python -m pip install --upgrade agents-local-tts`. Source installs use the git flow
+below. Legacy editable distributions named `local-tts` must be uninstalled before
+installing `agents-local-tts` in that same environment; do not leave competing entry
+points. Preserve the configuration and model directories.
 
-## 1. Find the repo behind the installed `tts`
+After either update, refresh skills and server scripts. Caches include implementation
+identity, so changed code does not reuse stale speech. `tts cache prune` reclaims
+expired entries; `tts cache clear` is an optional explicit reset.
+
+## 1. Identify the installed distribution
 
 Don't ask where it was cloned — resolve it from the running binary, the same way you would
 diagnose any other "which install is this" question:
@@ -18,22 +24,25 @@ diagnose any other "which install is this" question:
 ```bash
 TTS_BIN=$(command -v tts || command -v local-tts)
 VENV_PY=$(head -1 "$TTS_BIN" | sed 's/^#!//')     # the shebang is an absolute interpreter path
-"$VENV_PY" -m pip show local-tts
+"$VENV_PY" -m pip show agents-local-tts local-tts
 ```
 
 - **`Editable project location: /path/to/repo`** present → this is the normal install (a
   venv plus `pip install -e .`, optionally symlinked onto `PATH`). That path is the repo —
   `cd` into it for every step below.
-- **No "Editable project location"** → installed with `pipx install .` (the alternative the
-  README documents). pipx built a static copy; pulling a repo won't touch it. You need the
-  *source* repo the user cloned to run `pipx install . --force` from — ask them for its
-  path if you don't already know it. There's no way to recover it from a pipx install alone.
+- **No "Editable project location" and distribution `agents-local-tts`** → use
+  `pipx upgrade agents-local-tts`, or the owning interpreter's
+  `-m pip install --upgrade agents-local-tts`. No checkout is needed. Then refresh
+  skills, hooks and servers in step 6 and verify in step 8; skip git-only steps.
+- **Legacy static `local-tts` distribution** → preserve configuration/model directories,
+  uninstall that legacy distribution in its owning environment, then install
+  `agents-local-tts`. This migrates the package without inventing a missing checkout.
 
 On Windows the shebang line isn't plain text the same way; instead run
-`python -m pip show local-tts` using whichever `python` the user activated when they
+`python -m pip show agents-local-tts local-tts` using whichever `python` the user activated when they
 installed it (ask if that's unclear).
 
-## 2. Check for local changes before pulling
+## 2. Source installs only: check for local changes before pulling
 
 ```bash
 cd <repo>
@@ -109,7 +118,7 @@ runtime dependencies:
 pip install -e .        # using the venv's own pip (activate it, or call it by full path)
 ```
 
-**pipx install:** pipx never re-reads the source directory on its own — always reinstall:
+**Source-based pipx install only:** pipx never re-reads the source directory on its own — reinstall:
 
 ```bash
 pipx install . --force
@@ -117,7 +126,8 @@ pipx install . --force
 
 ## 6. Refresh what lives *outside* the repo
 
-Agent skills were already refreshed in step 4. One more thing `local-tts` writes elsewhere
+For a PyPI update, run `tts skills --install` now; source installs refreshed skills
+in step 4. One more thing `local-tts` writes elsewhere
 is a **copy made at install time**, not a live pointer into the repo — pulling does not
 update it on its own:
 
@@ -237,3 +247,9 @@ user to restart their agent or start a new session — say so plainly, it's not 
 cleanup. This update is already complete either way; the restart is about their *next*
 conversation loading everything (not just this skill) the normal way instead of whatever
 got it here this time.
+
+For v2, verify `tts settings --help`, `tts cache status`, and `tts warm --help`.
+All eight agent targets now receive native SKILL.md directories; migrating a complete
+installation backs up/removes only the old managed instruction block. Restart the
+agent session after `tts skills --install`. The PyPI distribution rename does not
+rename config files, models, commands, or the `localtts` Python package.

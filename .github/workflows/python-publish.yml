@@ -1,0 +1,64 @@
+name: Publish Python Package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release identity
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, tomllib
+          data = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']
+          assert data['name'] == 'agents-local-tts'
+          assert os.environ['RELEASE_TAG'] == 'v' + data['version'], 'Run publishing from the matching release tag'
+          source = pathlib.Path('src/localtts/__init__.py').read_text()
+          assert re.search(r'__version__\s*=\s*[\"\x27]' + re.escape(data['version']) + r'[\"\x27]', source)
+          PY
+      - name: Test
+        run: PYTHONPATH=src python -m unittest discover -s tests
+      - name: Build and validate distributions
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+          if-no-files-found: error
+
+  pypi-publish:
+    runs-on: ubuntu-latest
+    needs: release-build
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agents-local-tts
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+      - name: Publish to PyPI with trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

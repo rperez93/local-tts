@@ -469,3 +469,23 @@ Close with a short summary containing:
 | `tts` not found after the symlink | `~/.local/bin` not on `PATH` | report it; ask before editing shell config |
 | `command not found: <binary>` from `tts` | a configured provider binary is missing | `tts check` names it; fix the path with `tts config --set <provider>.binary=…` |
 | Traceback instead of a one-line error | a genuine bug | report it; the CLI is supposed to print `tts: error: …` |
+
+## v2.0 installation and validation
+
+For normal usage prefer `pipx install agents-local-tts`, or
+`python -m pip install agents-local-tts` inside the selected virtual environment.
+Use editable source installs for development. The commands remain `tts` / `local-tts`.
+When migrating the legacy `local-tts` distribution in the same environment, uninstall
+that old distribution before installing `agents-local-tts`; preserve config/models.
+
+After backend setup run `tts check`, `tts skills --install`, and
+`tts servers --refresh`. Verify a requested language with the user's actual player.
+`tts settings` exposes all settings in a terminal; `tts config --set` remains the
+scriptable interface. For latency, offer the bounded disk cache (36 hours/256 MiB)
+and explicit `tts warm --lang CODE --keep-alive 1800`. These are configurable, and
+model residency uses RAM/VRAM. Follow existing user authorization rather than asking
+again for an already approved installation or configuration.
+
+See [agent support](docs/agents.md) for current native paths for Codex, Claude Code,
+OpenCode, Cursor, Gemini, Windsurf, Copilot CLI and Qwen. Native skills do not imply
+that every agent exposes a live status-bar hook, or that remote audio plays locally.

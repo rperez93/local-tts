@@ -1,6 +1,6 @@
 ---
 name: local-tts-configure
-description: Install, diagnose, and configure the local `tts` CLI (local-tts) — backends (kokoro by default, piper, RVC, llama.cpp, OpenAI-compatible), a voice per language, mixed-language text (a borrowed word keeps its own sound through the pronunciation dictionary's `/IPA/` entries, said by the same voice inside the same sentence), pronunciation dictionaries, persistent model servers, streamed playback, player selection and per-machine player tuning, and the per-language provider memory. TRIGGER whenever the user asks to install, add, set up, enable or switch to ANY speech backend, provider, TTS engine or voice model — named ("install piper", "add kokoro", "set up rvc", "use OpenAI for speech") or not ("install a TTS backend", "add another voice engine", "I want a better/second/offline TTS", "instala un backend de voz") — that request means follow this skill's install steps, not improvise your own, and it applies to a backend this skill does not list too: the answer there is `command` or a new provider, never an ad-hoc install. kokoro and rvc are meant to run as a persistent server, and setting that up is part of installing them. Also use when text-to-speech is missing or broken, when the user wants a different or better voice, when they need a new language, when speech is slow and could use a persistent server, or when they ask to change any speech setting — including adding a second language for pronunciation, mapping a voice to a language, or asking what a setting does. Contains a complete reference of every setting local-tts has. For speech that already works but *sounds* wrong (robotic, noisy, too fast, choppy), use local-tts-tune instead.
+description: Install, diagnose, and configure local-tts backends, per-language voices, pronunciation dictionaries, audio caching, model warm-up, the settings TUI, and agent integration. Use when speech is missing, a backend or voice needs setup, playback starts slowly, or the user wants to change settings.
 ---
 
 # Configuring `local-tts`
@@ -365,14 +365,14 @@ def substitute_phonetics(text, lang, table):
     import re as _re
     if not table:
         return text, False
-    _warn_unsayable(table, lang)
 
     #: Nonsense, unlikely to appear, and pronounceable in every language espeak knows,
     #: so its presence does not disturb the stress of what surrounds it.
     marker = "Kalakala"
 
-    baseline = phonemes(text, lang)
+    baseline = None
     spans = []
+    occupied = []
     for word in sorted(table, key=len, reverse=True):
         # A hyphen counts as part of the word: "pre-build" is not "build", and matching
         # inside it used to snap the span out to the surrounding spaces and swallow the
@@ -380,6 +380,14 @@ def substitute_phonetics(text, lang, table):
         pattern = _re.compile(r"(?<![\w-])%s(?![\w-])" % _re.escape(word), _re.IGNORECASE)
         found = list(pattern.finditer(text))
         for occurrence, hit in enumerate(found):
+            # The longest matching phrase owns its words. Otherwise entries for
+            # both "pull request" and "request" overwrite overlapping phoneme
+            # offsets and corrupt the rest of the sentence.
+            if any(hit.start() < end and hit.end() > start for start, end in occupied):
+                continue
+            if baseline is None:
+                baseline = phonemes(text, lang)
+            _warn_unsayable({word: table[word]}, lang)
             # One placeholder run per occurrence: replacing them all at once would leave
             # a single differing region covering everything between the first and last,
             # and replacing only the first left every later one in the host language.
@@ -404,7 +412,10 @@ def substitute_phonetics(text, lang, table):
             # A span that is empty, or that swallowed most of the line, means the
             # second transcription diverged for another reason. Skipping is the safe
             # answer: the word is still said, just this language's way.
-            if start >= end or (end - start) > len(baseline) * 0.6:
+            isolated = not _re.search(r"\w", text[:hit.start()] + text[hit.end():])
+            if start >= end or (not isolated and (end - start) > len(baseline) * 0.6):
+                continue
+            if any(start < old_end and end > old_start for old_start, old_end, _ in spans):
                 continue
             # Punctuation rides along with the word it follows ("backend?" has no
             # space before the mark) and the snap would swallow it. Losing it costs the
@@ -414,6 +425,7 @@ def substitute_phonetics(text, lang, table):
                    and baseline[end - 1 - len(carried)] in ".,;:!?…"):
                 carried = baseline[end - 1 - len(carried)] + carried
             spans.append((start, end, table[word] + carried))
+            occupied.append((hit.start(), hit.end()))
 
     if not spans:
         return text, False
@@ -424,7 +436,27 @@ def substitute_phonetics(text, lang, table):
     return out, True
 
 
+def runtime_cache_state():
+    # Capture identities once, when the models have just loaded, not per health probe.
+    assets = {}
+    model_roots = [MODELS] if "MODELS" in globals() else []
+    for argument in [sys.argv[0]] + sys.argv[1:] + model_roots:
+        path = os.path.expanduser(argument.split("=", 1)[-1])
+        candidates = [path]
+        if os.path.isdir(path):
+            candidates += [os.path.join(path, name) for name in
+                           ("kokoro-v1.0.onnx", "voices-v1.0.bin")]
+        if path.endswith(".onnx"):
+            candidates.append(path + ".json")
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                st = os.stat(candidate)
+                assets[os.path.realpath(candidate)] = [st.st_size, st.st_mtime_ns]
+    return {"argv": sys.argv[1:], "script": os.path.realpath(sys.argv[0]), "assets": assets}
+
+
 def make_handler(kokoro, last_activity):
+    cache_state = runtime_cache_state()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -438,7 +470,7 @@ def make_handler(kokoro, last_activity):
                 # pronunciation dictionary's IPA entries from an older copy that
                 # would accept them and drop them without a word.
                 body = json.dumps({"ok": True, "phonetics": True, "shutdown": True,
-                                   "vocab": True}).encode("utf-8")
+                                   "vocab": True, "cache_state": cache_state}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -465,6 +497,12 @@ def make_handler(kokoro, last_activity):
                 self.end_headers()
 
         def do_POST(self):
+            if self.path == "/keepalive":
+                last_activity[0] = time.time()
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.path == "/shutdown":
                 # `tts servers --refresh` rewrites this file, but the process already
                 # running is still the old code -- and it would keep answering for up
@@ -660,10 +698,32 @@ Holds one RVCInference per --model NAME=PATH pair, all resident, and picks one p
 request from the JSON body's "model" key. Requests that name nothing get the first
 model, so a single-model setup behaves exactly as it always did.
 """
-import argparse, json, os, sys, threading, time
+import argparse, json, math, os, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
+def runtime_cache_state():
+    # Capture identities once, when the models have just loaded, not per health probe.
+    assets = {}
+    model_roots = [MODELS] if "MODELS" in globals() else []
+    for argument in [sys.argv[0]] + sys.argv[1:] + model_roots:
+        path = os.path.expanduser(argument.split("=", 1)[-1])
+        candidates = [path]
+        if os.path.isdir(path):
+            candidates += [os.path.join(path, name) for name in
+                           ("kokoro-v1.0.onnx", "voices-v1.0.bin")]
+        if path.endswith(".onnx"):
+            candidates.append(path + ".json")
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                st = os.stat(candidate)
+                assets[os.path.realpath(candidate)] = [st.st_size, st.st_mtime_ns]
+    return {"argv": sys.argv[1:], "script": os.path.realpath(sys.argv[0]), "assets": assets}
+
+
 def make_handler(models, default_name, last_activity, lock):
+    cache_state = runtime_cache_state()
+    defaults = {name: {key: getattr(rvc, key) for key in
+                ("f0up_key", "index_rate", "protect")} for name, rvc in models.items()}
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
 
@@ -681,13 +741,19 @@ def make_handler(models, default_name, last_activity, lock):
             if self.path == "/health":
                 # JSON rather than a bare "ok": a client reads this to tell a current
                 # server from an older copy that would ignore what it cannot parse.
-                self._json(200, {"ok": True, "shutdown": True})
+                self._json(200, {"ok": True, "shutdown": True, "conversion_parameters": True, "cache_state": cache_state})
             elif self.path == "/models":
                 self._json(200, {"models": sorted(models), "default": default_name})
             else:
                 self.send_response(404); self.end_headers()
 
         def do_POST(self):
+            if self.path == "/keepalive":
+                last_activity[0] = time.time()
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.path == "/shutdown":
                 # See kokoro's server: a refreshed script only takes over once the
                 # process running the old one lets go of the port.
@@ -703,6 +769,21 @@ def make_handler(models, default_name, last_activity, lock):
             except ValueError:
                 self.send_response(400); self.end_headers(); return
 
+            if not isinstance(body, dict):
+                self._json(400, {"error": "expected a JSON object"}); return
+            overrides = {}
+            try:
+                for key, target, lower, upper in (("pitch", "f0up_key", -24, 24),
+                        ("index_rate", "index_rate", 0, 1), ("protect", "protect", 0, 0.5)):
+                    if key in body:
+                        value = float(body[key])
+                        if not math.isfinite(value) or not lower <= value <= upper:
+                            raise ValueError("%s must be between %s and %s" % (key, lower, upper))
+                        if key == "pitch" and not value.is_integer():
+                            raise ValueError("pitch must be an integer")
+                        overrides[target] = int(value) if key == "pitch" else value
+            except (TypeError, ValueError) as exc:
+                self._json(400, {"error": str(exc)}); return
             name = body.get("model") or default_name
             if name not in models:
                 self._json(404, {"error": "no such model %r" % name,
@@ -714,18 +795,30 @@ def make_handler(models, default_name, last_activity, lock):
                 self.wfile.write(b"input_path missing or does not exist"); return
 
             rvc = models[name]
-            out_path = input_path + ".converted.wav"
-            # One GPU, one torch model at a time: serialize inference even though the
-            # HTTP server is threaded, so two languages arriving together queue instead
-            # of corrupting each other's state via set_params().
-            with lock:
-                if "pitch" in body:
-                    rvc.set_params(f0up_key=int(body["pitch"]))
-                rvc.infer_file(input_path, out_path)
-            with open(out_path, "rb") as fh:
-                data = fh.read()
-            os.unlink(out_path)
-            last_activity[0] = time.time()
+            descriptor, out_path = tempfile.mkstemp(prefix="local-tts-rvc-", suffix=".wav")
+            os.close(descriptor)
+            try:
+                # Reset every request to the model's startup values, then apply only
+                # this request's overrides. Always restore, including on inference errors.
+                with lock:
+                    try:
+                        rvc.set_params(**dict(defaults[name], **overrides))
+                        rvc.infer_file(input_path, out_path)
+                    finally:
+                        rvc.set_params(**defaults[name])
+                with open(out_path, "rb") as fh:
+                    data = fh.read()
+                if not data:
+                    raise RuntimeError("conversion produced no audio")
+            except Exception as exc:
+                # Cleanup must finish before the client receives the failure.
+                if os.path.exists(out_path):
+                    os.unlink(out_path)
+                self._json(500, {"error": str(exc)}); return
+            finally:
+                if os.path.exists(out_path):
+                    os.unlink(out_path)
+                last_activity[0] = time.time()
 
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
@@ -827,12 +920,15 @@ tts --lang es "Prueba de voz."   # auto-starts the server, asks it for cortana-e
 tts --lang en "Voice test."      # same server, same torch, jarvis this time
 ```
 
-**Conversion settings only reach the server through these startup flags.** This is the
-single most common reason a converted voice sounds weak: `rvc.method`, `rvc.index_rate`
-and `rvc.protect` configure the *CLI fallback*, and the request body carries only
-`input_path`, `model` and `pitch`. A server started without `--index-rate/--protect/
---f0method` silently runs rvc-python's own defaults (`index_rate=0.5`, `protect=0.33`,
-`f0method="harvest"`) no matter what the config file says. Put them on the command line.
+**Startup flags establish defaults; current servers also accept per-request tuning.**
+`rvc.index_rate` and `rvc.protect` apply to both server and CLI conversion. A language
+can override them with `rvc.conversion.es={"index_rate":0.65,"protect":0.2}`. Supported
+keys are `index_rate` (0–1), `protect` (0–0.5), and `pitch` (integer semitones, −24–24).
+`rvc.method` remains a CLI setting; use `--f0method` for the server. An old server that
+cannot honor per-request tuning reports an error instead of silently ignoring it;
+run `tts servers --refresh`. Each request restores startup values afterward, including
+on failure, so an experiment cannot affect another language or later call. A scoped
+`"pitch":0` explicitly requests no shift; an unset pitch preserves the startup value.
 
 **Which voices exist is still fixed at startup** — adding one means restarting the server
 with another `--model name=path` pair. What is *not* fixed any more is which of them a
@@ -1412,7 +1508,8 @@ never have to guess whether something is configurable.
 | `base_provider` | `""` | which backend speaks before conversion (kokoro is the sensible one) |
 | `model` / `index` | `""` | the `.pth` and `.index` for the CLI fallback |
 | `device` | `cpu` | `cuda:0` only if that venv has a CUDA torch |
-| `pitch` / `method` / `index_rate` / `protect` | | conversion parameters (CLI fallback) |
+| `pitch` / `method` / `index_rate` / `protect` | | conversion parameters; method uses server startup flags |
+| `conversion` | `{}` | per-language pitch, index_rate and protect overrides |
 | `server_url` / `server_start` / `server_timeout` | | the persistent multi-voice server |
 | `server_models` / `server_model` | | voices the server holds, and the fallback one |
 | `language_models` | `{}` | language → resident voice name |
@@ -1481,3 +1578,41 @@ PowerShell.
 
 Re-run `tts check`, speak one real sentence in the user's language, and tell them what you
 changed, what you recorded in `tts languages`, and the one command they will use daily.
+
+## v2 settings, caching and model warm-up
+
+Use `tts settings` for the terminal editor or keep using `tts config --set KEY=VALUE`.
+Both write the same configuration atomically. Changes load on the next request;
+the editor and bounded warm sessions also refresh external edits. Never promise
+live replacement of an active model: startup-only server settings take effect when
+that server next starts, without interrupting active speech.
+
+New settings (all also exposed as LOCALTTS_<UPPERCASE_KEY>):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| cache_enabled | false | Opt in to the persistent audio cache |
+| cache_ttl_hours | 36 | Fixed expiration after insertion |
+| cache_max_mb | 256 | MiB limit for cache entries, including headers |
+| cache_policy | lfu | Evict least-used first; lru selects oldest access |
+| cache_dir | empty | OS cache directory; custom root gets audio-v1 subdirectory |
+| cache_revision | empty | Manual cache invalidation for opaque remote model changes |
+| ending_silence_ms | 0 | Extra silence only after the final WAV fragment; 0–5000 |
+| warm_keep_alive_seconds | 0 | Default bounded warm duration; 0–86400 |
+| warm_interval_seconds | 10 | Keep-alive/config reload interval; 0.1–60 |
+| tui_refresh_seconds | 1 | Editor reload interval; 0.1–60 |
+
+`tts cache status|prune|clear` manages the cache. `--no-cache` bypasses it;
+`--refresh-cache` renders and replaces an entry. Dynamic phonetics hooks bypass it.
+Expiration and budget cleanup run on activity, not via a hidden daemon. The budget
+does not cover exported recordings, model files, RAM/VRAM, or filesystem block
+rounding. Cache hits are copied before playback, so eviction cannot remove playing audio.
+
+`tts warm --lang en --lang es` loads selected models without playback.
+`tts warm --lang en --text "The build is ready." --keep-alive 1800` prefills a phrase
+and keeps local servers resident for thirty minutes. It runs in the foreground;
+launch it in a managed terminal when ongoing warmth is desired. Stop with Ctrl-C.
+Do not describe an enabled cache as proof that an oversized/failed entry was stored.
+Use `tts cache status` and `--verbose` to verify a hit. Refresh old server scripts
+with `tts servers --refresh` before using keep-alive. Cache removes synthesis latency,
+not PowerShell startup or time queued behind another speaker.
