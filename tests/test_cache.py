@@ -155,3 +155,20 @@ class CacheTest(unittest.TestCase):
             before = cache.fingerprint(p, 'hello', None, self.cfg)
             model.write_bytes(b'new model')
             self.assertNotEqual(before, cache.fingerprint(p, 'hello', None, self.cfg))
+
+    def test_explicit_wav_gets_padding_even_for_default_mp3_provider(self):
+        class Fake(Provider):
+            name = 'openai'
+            default_format = 'mp3'
+            def synthesize(self, sentence, path, voice=None):
+                with wave.open(path, 'wb') as wav:
+                    wav.setparams((1, 2, 1000, 0, 'NONE', 'not compressed'))
+                    wav.writeframes(b'\x01\x01' * 100)
+                return path
+        self.cfg['ending_silence_ms'] = 350
+        provider = Fake({}, cfg=self.cfg)
+        with patch.object(config, 'load', return_value=self.cfg), patch.object(cli.providers, 'build', return_value=provider), contextlib.redirect_stdout(io.StringIO()):
+            cli.speak(['--no-play', '-o', str(self.out), 'Hello.'])
+            self.assertEqual(audio.duration(str(self.out)), .45)
+            cli.speak(['--no-play', '-o', str(self.out), 'Hello.'])
+            self.assertEqual(audio.duration(str(self.out)), .45)

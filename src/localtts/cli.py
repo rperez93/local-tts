@@ -323,7 +323,7 @@ def speak(argv):
     # Streaming hands the player one fragment file at a time, so it needs a format every
     # installed player can open standalone -- true of wav, not of a compressed stream
     # (Windows' built-in player cannot take mp3 at all).
-    use_stream = should_play and stream_on and provider.default_format == "wav"
+    use_stream = should_play and stream_on and output_format == "wav"
 
     try:
         ending_ms = float(cfg.get("ending_silence_ms", 0))
@@ -331,7 +331,7 @@ def speak(argv):
             raise ValueError
     except (TypeError, ValueError):
         raise TTSError("ending_silence_ms must be between 0 and 5000")
-    ending_seconds = ending_ms / 1000 if provider.default_format == "wav" else 0
+    ending_seconds = ending_ms / 1000 if output_format == "wav" else 0
     audio_cache, cache_key, cache_hit = None, None, False
     if cfg.get("cache_enabled") and not args.no_cache and not cfg.get("phonetics_hooks"):
         audio_cache = cache.AudioCache(cfg)
