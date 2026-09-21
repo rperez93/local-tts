@@ -1449,7 +1449,7 @@ Layout:
 
 ```
 src/localtts/
-├── cli.py            argument parsing and the four subcommands
+├── cli.py            argument parsing and the command catalog
 ├── config.py         defaults, config file, env vars, precedence
 ├── text.py           markdown stripping and sentence-aware chunking
 ├── audio.py          playback autodetection and wav joining
@@ -1591,14 +1591,27 @@ resident models. `--keep-alive` runs visibly for a bounded period, never plays a
 and exits with Ctrl-C; it does not install a hidden daemon. Holding models warm uses
 RAM/VRAM. PowerShell process startup and queued playback still contribute latency.
 
-The terminal editor supports arrows/j/k, Enter to edit, `/` to filter, `a` to add a
-CLI-style assignment, and `q` to quit. All top-level settings, provider settings and
+![Settings editor with a filtered list, selected value and fixed key legend](assets/settings.png)
+
+Run `tts help` (or `tts --help`) for the complete command list, and
+`tts help COMMAND` for every option of a command. `tts settings --help` lists
+all editor keys without opening the TUI.
+
+The terminal editor uses a Collab-style title bar, a scrollable settings pane,
+a selected-value/input pane and a fixed key legend. Press `?` or F1 for all
+keyboard actions, CLI commands and value syntax. Use arrows/j/k to select,
+PgUp/PgDn to page, Home/End or g/G to jump, Enter/e to edit, `/` to filter,
+`a` to add a CLI-style assignment, and `q` to quit. In an input field,
+Enter saves, Esc cancels, Backspace deletes and Ctrl-U clears; outside an input,
+Esc closes help or clears the filter. Blank edits cancel; `""` clears a string. All top-level settings, provider settings and
 language mappings are exposed. Lists/maps use JSON. API keys are masked. It reloads
 external edits automatically; the CLI reloads configuration on every request. Saves
 are atomic and serialized across processes. Active utterances keep their snapshot;
 new requests use new voices/settings. A running warm session reloads its plan.
 Backend **startup-only** settings (loaded models, port/device/start command) apply
 when that server next starts; editing them never kills an active utterance.
+
+![Scrollable editor help with keyboard actions and the CLI command catalog](assets/settings-help.png)
 
 See [the complete settings reference](docs/settings.md),
 [agent support](docs/agents.md), and [v2.0.0 migration/release notes](CHANGELOG.md).

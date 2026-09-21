@@ -1582,6 +1582,13 @@ changed, what you recorded in `tts languages`, and the one command they will use
 ## v2 settings, caching and model warm-up
 
 Use `tts settings` for the terminal editor or keep using `tts config --set KEY=VALUE`.
+The Collab-style editor has a fixed title/key bar, a settings list and a detail/input
+pane. `?`/F1 shows all keys and CLI commands; `tts settings --help` lists keys without
+opening the editor. `tts help` lists all CLI commands; `tts help COMMAND` lists options.
+Move with arrows/j/k, PgUp/PgDn or Home/End (g/G); Enter/e edits, `/` filters, `a` adds
+KEY=VALUE, q quits. While typing: Enter saves, Esc cancels, Backspace deletes, Ctrl-U
+clears. Blank edits cancel; `""` clears strings. Outside input, Esc closes help or
+clears the filter. Lists/maps use JSON; environment overrides retain priority.
 Both write the same configuration atomically. Changes load on the next request;
 the editor and bounded warm sessions also refresh external edits. Never promise
 live replacement of an active model: startup-only server settings take effect when
