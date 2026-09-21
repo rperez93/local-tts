@@ -29,3 +29,10 @@ Optional ASR evaluation requires faster-whisper in a separate environment:
 The recognizer model downloads if absent. Speech stays local. Word and character
 error rates are proxies for intelligibility, not phonetic or naturalness verdicts.
 See `docs/unattended-calibration-2026-09-20.md` for measured results and limitations.
+
+## Settings screenshots
+
+`python tools/capture_settings.py` refreshes `assets/settings.png` and
+`assets/settings-help.png` from a real editor in an isolated tmux server with
+a disposable config. It requires tmux, Pillow and DejaVu Sans Mono (or `--font`).
+These are documentation tools only; the CLI has no runtime dependencies.

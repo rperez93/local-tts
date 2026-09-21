@@ -28,6 +28,34 @@ Startup-only server options apply on the next server start.
 | `phonetics_hooks` | `[]` |
 | `phonetics_hook_timeout` | `5.0` |
 
+## Terminal editor
+
+Launch with `tts settings`. The title, settings list, selected-value/input pane
+and key legend stay in place as you navigate or resize the terminal. The editor
+uses an alternate screen and restores your shell on exit. Minimum size: 40×12.
+
+| Key | Action |
+| --- | --- |
+| Up/Down or j/k | Select a setting; scroll help |
+| PgUp/PgDn | Move one page |
+| Home/End or g/G | First/last row |
+| Enter or e | Edit selected setting |
+| / | Filter by name |
+| a | Add `KEY=VALUE` (including map entries or new languages) |
+| ? or F1 | Open/close complete keyboard and CLI help |
+| Esc | Cancel input, close help, or clear filter |
+| q or Ctrl-C | Quit; q is ordinary text while editing |
+| Enter / Backspace / Ctrl-U in input | Save / delete character / clear input |
+
+Values use text, numbers, true/false, or JSON for lists/maps. Blank edits cancel;
+`""` clears a string. For example, add `languages.es=kokoro` or
+`rvc.delivery.es.speed=0.95`. Empty map-entry assignments remove entries.
+Secret values stay masked during editing. Environment overrides retain priority
+over saved values. Invalid saves leave the config intact and input open to correct.
+
+`tts settings --help` lists every key without a terminal. `tts help` lists every
+CLI command; `tts help COMMAND` and `tts COMMAND --help` list its options.
+
 ## llamacpp
 
 | Key | Default |

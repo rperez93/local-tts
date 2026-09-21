@@ -480,6 +480,9 @@ that old distribution before installing `agents-local-tts`; preserve config/mode
 
 After backend setup run `tts check`, `tts skills --install`, and
 `tts servers --refresh`. Verify a requested language with the user's actual player.
+`tts help` lists every command; `tts help COMMAND` lists its options.
+`tts settings --help` lists editor keys; press `?` inside the editor for all
+keyboard actions, CLI commands and value syntax.
 `tts settings` exposes all settings in a terminal; `tts config --set` remains the
 scriptable interface. For latency, offer the bounded disk cache (36 hours/256 MiB)
 and explicit `tts warm --lang CODE --keep-alive 1800`. These are configurable, and

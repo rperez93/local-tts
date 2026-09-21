@@ -14,8 +14,28 @@ from localtts import (__version__, audio, cache, calibration, config, hooks, pho
 from localtts.errors import TTSError
 
 PROG = "tts"
-SUBCOMMANDS = ("config", "providers", "check", "languages", "skills", "hooks",
-               "servers", "pronounce", "calibrate", "cache", "warm", "settings", "playback", "stop", "pause", "resume")
+# The CLI and settings help share this catalog so newly exposed commands cannot
+# disappear from one of the two places people look for them.
+COMMAND_HELP = {
+    "config": "inspect configuration or persist KEY=VALUE settings",
+    "providers": "list available speech backends",
+    "check": "verify backends and audio players",
+    "languages": "show or change the backend and voice for each language",
+    "skills": "inspect, install or remove agent skills",
+    "hooks": "inspect, install or remove status-bar hooks",
+    "servers": "inspect or refresh persistent server scripts",
+    "pronounce": "try a transcription for one word, by ear",
+    "calibrate": "save language samples and timing measurements",
+    "cache": "inspect, prune or clear the audio cache",
+    "warm": "warm models or phrases, optionally keep them resident",
+    "settings": "open the interactive terminal settings editor",
+    "playback": "inspect or control background playback",
+    "stop": "stop background playback",
+    "pause": "pause background playback",
+    "resume": "resume background playback",
+    "help": "list commands or show help for a command",
+}
+SUBCOMMANDS = tuple(COMMAND_HELP)
 
 #: Environment variables known to hold a stable per-run session id, checked in order.
 #: Verified against a live capture: Claude Code's own status-line JSON payload carries
@@ -56,18 +76,8 @@ def _speak_parser():
         prog=PROG,
         description="Speak text with a local TTS model (kokoro by default).",
         epilog=(
-            "subcommands:\n"
-            "  %(prog)s providers            list available backends\n"
-            "  %(prog)s languages            show which backend speaks which language\n"
-            "  %(prog)s skills               install agent skills for this CLI\n"
-            "  %(prog)s hooks                install a status-bar hook (fewer chat messages)\n"
-            "  %(prog)s servers             persistent server scripts: current or stale\n"
-            "  %(prog)s pronounce WORD      try a transcription for one word, by ear\n"
-            "  %(prog)s calibrate           save language samples and timing measurements\n"
-            "  %(prog)s stop | pause | resume control background playback\n"
-            "  %(prog)s check                verify backends and audio players\n"
-            "  %(prog)s config --show        print the effective configuration\n"
-            "  %(prog)s config --set k=v     persist a setting\n"
+            "subcommands:\n" + "".join("  tts %-12s %s\n" % item for item in COMMAND_HELP.items()) +
+            "\nRun tts help COMMAND (or tts COMMAND --help) for every option.\n"
             "\nexamples:\n"
             "  %(prog)s \"hello world\"\n"
             "  %(prog)s -o out.wav -f script.txt\n"
@@ -1113,7 +1123,7 @@ def config_command(argv):
     parser.add_argument("--path", action="store_true", help="print the config file path")
     parser.add_argument("--init", action="store_true", help="write a config file containing the defaults")
     parser.add_argument("--set", dest="assignments", action="append", default=[], metavar="KEY=VALUE",
-                        help="set provider, play, player, or <provider>.<key> (repeatable)")
+                        help="set a top-level, provider, language or map setting (repeatable)")
     parser.add_argument("--detect-migrations", action="store_true",
                         help="check the command.template for a tool local-tts now "
                              "supports as a real provider (e.g. it used to be the only "
@@ -1174,6 +1184,16 @@ def warm_command(argv):
     return warming.command(argv, speak)
 
 
+def help_command(argv):
+    parser = argparse.ArgumentParser(prog="tts help", description="List commands or their options.")
+    parser.add_argument("command", nargs="?", choices=SUBCOMMANDS)
+    args = parser.parse_args(argv)
+    if args.command:
+        return main([args.command, "--help"])
+    _speak_parser().print_help()
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Bare `tts` at a prompt is someone asking what the tool can do, not an empty
@@ -1197,6 +1217,7 @@ def main(argv=None):
                 "warm": warm_command,
                 "settings": settings_command,
                 "playback": playback_command,
+                "help": help_command,
             }.get(argv[0])
             if handler is None:      # stop / pause / resume are shortcuts
                 return playback_command(argv[1:], action=argv[0])

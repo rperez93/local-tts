@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.1
+
+- List every CLI command in `tts --help` and add `tts help [COMMAND]`.
+- Reshape the settings editor around Collab-style panes, title and key bars,
+  highlighted selection and in-screen input. Refresh changed rows without flicker,
+  preserve shell history and restore the terminal on exit.
+- Add scrollable keyboard/command help, page and first/last navigation, cancelable
+  input, Unicode-aware clipping and an explicit way to clear strings. Preserve
+  validated atomic saves, masked secrets and external configuration reloads.
+
 ## 2.0.0
 
 - Publish the distribution as **agents-local-tts** on PyPI. Commands remain `tts`
